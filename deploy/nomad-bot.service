@@ -1,0 +1,28 @@
+# Install to /etc/systemd/system/nomad-bot.service
+#
+# Check the paths below actually match the server before enabling — run `pwd`
+# in the bot directory rather than trusting /home/ubuntu/nomad-bot.
+#
+#   sudo cp deploy/nomad-bot.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/nomad-bot.service   # paste the real token
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nomad-bot
+#   sudo systemctl status nomad-bot
+
+[Unit]
+Description=Nomad Network Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/nomad-bot
+Environment="BOT_TOKEN=PASTE_YOUR_TOKEN_HERE"
+Environment="DB_PATH=/home/ubuntu/nomad-bot/nomad.db"
+ExecStart=/home/ubuntu/nomad-bot/venv/bin/python3 /home/ubuntu/nomad-bot/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
