@@ -119,8 +119,15 @@ async def run():
     uid += 1
     await dp.feed_update(bot, msg(uid, ADMIN, text="/announce Meetup on Friday, 6pm"))
     assert SENT and "ANNOUNCEMENT" in SENT[0], SENT
-    assert "@" not in SENT[0], "announcement must not tag members"
-    print("PASS  /announce posted, no mentions\n" + SENT[0])
+    assert "@" not in SENT[0], "announcement body itself must stay clean"
+    print("PASS  /announce posted\n" + SENT[0])
+
+    # the tag sweep follows, as its own message
+    tags = SENT[1]
+    assert "@anas" in tags and "@sanni" in tags, tags
+    # Yasin has no username, so he is only pingable via an inline user link
+    assert "tg://user?id=3" in tags, tags
+    print("PASS  tag sweep mentioned all 3 known members\n" + tags)
 
     # command messages must not inflate the stats
     total = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
