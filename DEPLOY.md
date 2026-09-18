@@ -30,9 +30,13 @@ sudo apt install -y python3-pip python3-venv git
 On the **server**, clone the public repo — no auth needed:
 
 ```bash
-git clone https://github.com/Anasabubakar/nomad-bot.git ~/nomad-bot
+git clone https://github.com/Anasabubakar/The-Nomad-Bot.git ~/nomad-bot
 cd ~/nomad-bot
 ```
+
+The target directory is `~/nomad-bot` even though the repo is `The-Nomad-Bot` —
+the systemd unit in `deploy/` points at `/home/ubuntu/nomad-bot`. Clone it
+somewhere else and you must edit those paths to match.
 
 <details>
 <summary>Alternative: copy directly from your machine instead</summary>
