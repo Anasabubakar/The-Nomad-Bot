@@ -127,6 +127,23 @@ async def record_message(
     await _conn().commit()
 
 
+async def taggable_members(chat_id: int) -> list:
+    """Members the bot can actually mention.
+
+    Only members it has recorded — someone who has never posted and never joined
+    while the bot was watching has no stored user_id and cannot be tagged.
+    """
+    async with _conn().execute(
+        """
+        SELECT user_id, username, first_name, last_name
+        FROM members WHERE chat_id = ? AND is_present = 1
+        ORDER BY user_id
+        """,
+        (chat_id,),
+    ) as cur:
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def group_summary(chat_id: int, days: int) -> dict:
     cutoff = _cutoff(days)
     async with _conn().execute(
