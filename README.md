@@ -64,4 +64,10 @@ PYTHONPATH="$PWD" ./venv/bin/python tests/smoke_test.py
 
 ## Deploy
 
-See [DEPLOY.md](DEPLOY.md).
+See [DEPLOY.md](DEPLOY.md). `deploy/bootstrap.sh` does the whole server-side
+setup in one command.
+
+## For the founder
+
+[BRIEF.md](BRIEF.md) — what the bot can do, what permissions it holds, what it
+stores, and what it cannot do. Written to be forwarded.
