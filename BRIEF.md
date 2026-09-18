@@ -11,9 +11,26 @@
 
 ### 1. Announcements — `/announce <message>`
 
-Posts a formatted, pinned announcement to the group. Everyone who has not muted
-the group receives a push notification. Admins only; ordinary members get a
-polite refusal.
+Posts a formatted, pinned announcement to the group, then tags every member on
+record so the notification is as hard to miss as Telegram allows. Admins only;
+ordinary members get a polite refusal.
+
+**How the tagging works, and what it cannot do.** Telegram has no `@all` or
+`@everyone` — not for bots, and not for human admins either. The bot
+approximates it by mentioning members individually, in batches of 50, spaced out
+to stay inside Telegram's rate limits. Three things follow from that, and they
+are limits of the platform rather than of this build:
+
+- **Only members the bot has recorded can be tagged.** A member who has never
+  posted, and who has not joined since the bot was added, is invisible to it.
+  Coverage therefore starts small and grows as people participate. `/announce`
+  reports how many members it reached, so this is never a guess.
+- **A mention does not override a mute.** Anyone who has muted the group stays
+  muted. Tagging adds reach only over members who left notifications on but
+  scroll past ordinary messages.
+- **It is visibly noisy.** A 1,000 member group means roughly 20 extra messages
+  of names after each announcement. This is the recognised cost of the feature,
+  and it is worth reserving `/announce` for things that genuinely warrant it.
 
 ### 2. Group analytics — `/stats`
 
@@ -76,11 +93,6 @@ nothing and removes any "we were not told" problem later.
 
 Stated directly so expectations do not outrun the product.
 
-- **There is no `@all` or `@everyone`.** Telegram has no such feature — not for
-  bots, not for human admins. `/announce` relies on the normal push
-  notification, which reaches everyone who has not muted the group. It will not
-  tag members individually: at 200–1,000 people that reads as spam and breaks
-  Telegram's rendering limits.
 - **No charts or graphs.** Everything renders as formatted text inside Telegram.
   There is no external dashboard, by design.
 - **No AI.** It counts and sorts. It cannot summarise conversations, gauge

@@ -17,13 +17,21 @@ Everything renders as Telegram text. There is no external dashboard.
 
 These are not style preferences. Changing them changes the product.
 
-**No `@all`, and no mass-tagging.** Telegram has no group-wide mention
-primitive — not for bots, not for human admins. `/announce` does not simulate
-one by tagging members individually; at this member count that either blows
-past Telegram's practical mention limits or reads as spam. A plain group
-message already pushes a notification to everyone who has not muted the chat,
-which is the outcome members actually experience. `util.display_name()`
-deliberately renders names without pinging.
+**There is still no `@all`.** Telegram has no group-wide mention primitive, for
+bots or for human admins. `/announce` approximates one: it posts the
+announcement, then sweeps through every recorded member in batches of 50,
+mentioning them. Two limits are inherent rather than fixable — only members the
+bot has actually recorded can be tagged (someone who has never posted and never
+joined while the bot was watching has no stored `user_id`), and a mention does
+not bypass a mute. `/announce` reports how many of the known members it reached.
+
+Batches are spaced `BATCH_DELAY_SECONDS` apart to stay under the ~20
+messages/minute group limit, and `TelegramRetryAfter` is honoured once before a
+batch is abandoned. Note the cost: a 1,000 member group means roughly 20 extra
+messages per announcement.
+
+`util.display_name()` still renders names *without* pinging — leaderboards in
+`/stats` are not a tag sweep and should not become one.
 
 **No message text is stored.** `messages` has columns for sender, timestamp,
 media flag, reply flag, and length — and no column that can hold content. This
