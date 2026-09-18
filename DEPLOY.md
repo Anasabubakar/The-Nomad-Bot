@@ -25,7 +25,17 @@ sudo apt update && sudo apt upgrade -y
 sudo apt install -y python3-pip python3-venv git
 ```
 
-## 3. Copy the code up
+## 3. Get the code onto the server
+
+On the **server**, clone the public repo — no auth needed:
+
+```bash
+git clone https://github.com/Anasabubakar/nomad-bot.git ~/nomad-bot
+cd ~/nomad-bot
+```
+
+<details>
+<summary>Alternative: copy directly from your machine instead</summary>
 
 From your **local** machine:
 
@@ -34,12 +44,15 @@ scp -i ~/.ssh/nomad-bot-key.pem -r "/home/gamp/Desktop/Projects/The Nomad Bot" \
     ubuntu@YOUR_PUBLIC_IP:~/nomad-bot
 ```
 
-The local `venv/` is Linux-x86 and the VM is ARM — do not reuse it. Rebuild on
-the server:
+If you do it this way, delete the copied `venv/` first — it is built for
+x86 Linux and the Oracle VM is ARM, so reusing it produces import errors that
+look like code bugs.
+</details>
+
+Then build the environment on the server:
 
 ```bash
 cd ~/nomad-bot
-rm -rf venv
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
