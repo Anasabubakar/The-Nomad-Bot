@@ -33,9 +33,9 @@ def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
 
     # ORDER MATTERS.
-    # - Command routers (announce/stats/diagnostics) must come before
-    #   community.router, or an unrecognised-looking mention could shadow a
-    #   real command.
+    # - Command routers (announce/stats/diagnostics/stats.dm_router) must
+    #   come before owner.router/community.router, or a literal command
+    #   typed in a DM gets treated as a question to the AI instead of run.
     # - owner.router must come before community.router: it raises SkipHandler
     #   for any private-chat sender who isn't the founder, which is exactly
     #   what lets community.router's DM handler pick those messages up.
@@ -43,6 +43,7 @@ def build_dispatcher() -> Dispatcher:
     #   group message; it must be LAST or it swallows everything ahead of it.
     dp.include_router(announce.router)
     dp.include_router(stats.router)
+    dp.include_router(stats.dm_router)
     dp.include_router(diagnostics.router)
     dp.include_router(owner.router)
     dp.include_router(community.router)
