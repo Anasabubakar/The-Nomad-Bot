@@ -1,20 +1,30 @@
-"""/announce — admin-only broadcast, followed by a tag sweep.
+"""/announce — admin-only broadcast: DM first, group tag as the fallback.
 
-Telegram has no @all primitive, for bots or for humans. The nearest possible
-thing is mentioning members individually, which this does in batches after the
-announcement itself.
+Telegram has no @all primitive, for bots or for humans. This gets as close as
+the platform allows in two passes:
 
-Two limits are inherent, not implementation gaps:
+1. DM every known member the announcement directly. This is the strongest
+   possible delivery — a DM always pushes a notification regardless of the
+   group's mute state.
+2. Anyone whose DM fails (Telegram forbids a bot DMing someone who has never
+   started a chat with it — there is no way around that) gets tagged instead,
+   in batches, in the fallback group configured as "nomad_lounge" in
+   destinations.py. If that destination is not configured, the fallback tags
+   land in the same group the announcement was posted to.
 
-* Only members the bot has recorded can be tagged. Someone who has never posted
-  and never joined while the bot was watching has no stored user_id.
-* A mention does not bypass a mute. Tagging only adds reach over members who
-  left the group unmuted but ignore ordinary messages.
+Two limits are inherent to the platform, not implementation gaps:
+
+* Only members the bot has recorded can be reached at all, by DM or by tag.
+  Someone who has never posted and never joined while the bot was watching has
+  no stored user_id.
+* A group mention does not bypass a mute. The DM pass exists specifically
+  because it is not subject to that limit — the fallback tag is a second-best.
 """
 
 import asyncio
 import logging
 from html import escape
+from typing import Optional
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
@@ -26,7 +36,7 @@ from aiogram.exceptions import (
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from .. import db
+from .. import db, destinations
 from ..util import GROUP_TYPES
 
 log = logging.getLogger(__name__)
@@ -43,9 +53,16 @@ MENTION_BATCH = 50
 # Groups accept roughly 20 bot messages per minute. Stay under it.
 BATCH_DELAY_SECONDS = 3.5
 
+# Spacing between individual DMs, so a large member list does not trip
+# Telegram's global ~30 messages/second bot-wide limit.
+DM_DELAY_SECONDS = 0.05
+
+FALLBACK_DESTINATION_KEY = "nomad_lounge"
+
 USAGE = (
     "Usage: <code>/announce your message here</code>\n\n"
-    "Posts a pinned announcement, then tags every member I have on record."
+    "Posts a pinned announcement, DMs every known member directly, and tags "
+    "anyone whose DM fails in the fallback group instead."
 )
 
 
@@ -70,11 +87,18 @@ def mention(row: dict) -> str:
     return f'<a href="tg://user?id={row["user_id"]}">{escape(name) or "member"}</a>'
 
 
-async def _send_with_retry(bot: Bot, chat_id: int, text: str) -> bool:
+async def _send_with_retry(
+    bot: Bot, chat_id: int, text: str, thread_id: Optional[int] = None
+) -> bool:
     """Send once, honouring a flood wait if Telegram asks for one."""
     for attempt in (1, 2):
         try:
-            await bot.send_message(chat_id, text, disable_notification=False)
+            await bot.send_message(
+                chat_id,
+                text,
+                message_thread_id=thread_id,
+                disable_notification=False,
+            )
             return True
         except TelegramRetryAfter as exc:
             if attempt == 2:
@@ -83,29 +107,72 @@ async def _send_with_retry(bot: Bot, chat_id: int, text: str) -> bool:
             log.info("flood wait %ss", exc.retry_after)
             await asyncio.sleep(exc.retry_after + 1)
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
-            log.warning("mention batch failed: %s", exc)
+            log.warning("send to %s failed: %s", chat_id, exc)
             return False
     return False
 
 
-async def tag_everyone(bot: Bot, chat_id: int) -> tuple:
-    """Tag every known member in batches. Returns (tagged, known)."""
+async def _dm_member(bot: Bot, user_id: int, text: str) -> bool:
+    try:
+        await bot.send_message(user_id, text, disable_notification=False)
+        return True
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(exc.retry_after + 1)
+        try:
+            await bot.send_message(user_id, text, disable_notification=False)
+            return True
+        except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter) as exc2:
+            log.info("DM to %s failed after retry: %s", user_id, exc2)
+            return False
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        # The expected case: this member has never started a chat with the
+        # bot, so Telegram refuses the DM. Not an error — falls back to a tag.
+        log.info("DM to %s failed, will fall back to a group tag: %s", user_id, exc)
+        return False
+
+
+async def notify_everyone(bot: Bot, chat_id: int, dm_text: str) -> dict:
+    """DM every known member; tag whoever's DM failed, in the fallback group.
+
+    Returns counts: known, dm_ok, gc_known (= dm failures), gc_tagged.
+    """
     members = await db.taggable_members(chat_id)
     if not members:
-        return 0, 0
+        return {"known": 0, "dm_ok": 0, "gc_known": 0, "gc_tagged": 0}
 
-    tagged = 0
-    batches = [
-        members[i : i + MENTION_BATCH] for i in range(0, len(members), MENTION_BATCH)
-    ]
-    for index, batch in enumerate(batches):
+    dm_ok = 0
+    dm_failures = []
+    for index, member in enumerate(members):
         if index:
-            await asyncio.sleep(BATCH_DELAY_SECONDS)
-        text = " ".join(mention(row) for row in batch)
-        if await _send_with_retry(bot, chat_id, text):
-            tagged += len(batch)
+            await asyncio.sleep(DM_DELAY_SECONDS)
+        if await _dm_member(bot, member["user_id"], dm_text):
+            dm_ok += 1
+        else:
+            dm_failures.append(member)
 
-    return tagged, len(members)
+    gc_tagged = 0
+    if dm_failures:
+        dest = destinations.load_destinations().get(FALLBACK_DESTINATION_KEY)
+        fallback_chat_id = dest.chat_id if dest else chat_id
+        fallback_thread_id = dest.thread_id if dest else None
+
+        batches = [
+            dm_failures[i : i + MENTION_BATCH]
+            for i in range(0, len(dm_failures), MENTION_BATCH)
+        ]
+        for index, batch in enumerate(batches):
+            if index:
+                await asyncio.sleep(BATCH_DELAY_SECONDS)
+            text = " ".join(mention(row) for row in batch)
+            if await _send_with_retry(bot, fallback_chat_id, text, fallback_thread_id):
+                gc_tagged += len(batch)
+
+    return {
+        "known": len(members),
+        "dm_ok": dm_ok,
+        "gc_known": len(dm_failures),
+        "gc_tagged": gc_tagged,
+    }
 
 
 @router.message(Command("announce"))
@@ -143,15 +210,17 @@ async def cmd_announce(message: Message, command: CommandObject, bot: Bot) -> No
             "<b>Pin Messages</b> admin permission to enable that."
         )
 
-    tagged, known = await tag_everyone(bot, message.chat.id)
+    result = await notify_everyone(bot, message.chat.id, text)
 
-    if known == 0:
+    if result["known"] == 0:
         await message.reply(
-            "Announcement posted. I have no members on record yet, so there was "
-            "nobody to tag — I can only tag members I have seen post or join."
+            "Announcement posted. I have no members on record yet, so there "
+            "was nobody to DM or tag — I can only reach members I have seen "
+            "post or join."
         )
-    elif tagged < known:
+    else:
         await message.reply(
-            f"Announcement posted. Tagged {tagged} of {known} known members; "
-            "the rest failed, likely rate limiting. Check the logs."
+            f"Announcement posted. DMed {result['dm_ok']} of {result['known']} "
+            f"known members directly; tagged {result['gc_tagged']} of "
+            f"{result['gc_known']} of the rest in the fallback group."
         )

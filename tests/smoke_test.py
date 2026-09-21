@@ -11,24 +11,33 @@ import tempfile
 
 os.environ["BOT_TOKEN"] = "123456:TEST"
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
+os.environ["OWNER_USERNAME"] = "davidnomad"
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import GetChatMember, PinChatMessage, SendMessage
 from aiogram.types import Chat, ChatMemberOwner, Message, Update, User
 
 import main
 from nomadbot import db
 
-SENT = []
+SENT = []  # group-chat sends only
+DM_ATTEMPTS = []  # every DM attempt, successful or not, as user_id
+DM_LOG = []  # (chat_id, text) for every DM attempt, for content assertions
 CHAT = Chat(id=-1001234567890, type="supergroup", title="Nomad Network")
 ADMIN = User(id=1, is_bot=False, first_name="Anas", username="anas")
 MEMBERS = [
     User(id=2, is_bot=False, first_name="Sanni", username="sanni"),
     User(id=3, is_bot=False, first_name="Yasin", last_name="K"),
 ]
+
+# Yasin (id 3) has never opened a DM with the bot — Telegram forbids the bot
+# from DMing him first, which is exactly the case the fallback-to-group-tag
+# path exists for.
+FORBIDDEN_DM_IDS = {3}
 
 
 class FakeSession(BaseSession):
@@ -40,11 +49,23 @@ class FakeSession(BaseSession):
 
     async def make_request(self, bot, method, timeout=None):
         if isinstance(method, SendMessage):
-            SENT.append(method.text)
+            if method.chat_id == CHAT.id:
+                SENT.append(method.text)
+                return Message(
+                    message_id=999,
+                    date=dt.datetime.now(dt.timezone.utc),
+                    chat=CHAT,
+                    text=method.text,
+                )
+            # a positive chat_id here is a DM (private chat.id == user.id)
+            DM_ATTEMPTS.append(method.chat_id)
+            DM_LOG.append((method.chat_id, method.text))
+            if method.chat_id in FORBIDDEN_DM_IDS:
+                raise TelegramForbiddenError(method, "Forbidden: bot can't initiate a conversation with the user")
             return Message(
-                message_id=999,
+                message_id=998,
                 date=dt.datetime.now(dt.timezone.utc),
-                chat=CHAT,
+                chat=Chat(id=method.chat_id, type="private"),
                 text=method.text,
             )
         if isinstance(method, GetChatMember):
@@ -68,6 +89,21 @@ def msg(uid, user, text=None, ts_offset=0, photo=None, reply=False):
             )
             if reply
             else None,
+        ),
+    )
+
+
+def dm(uid, user, text):
+    """A private-chat message — Telegram sets chat.id == user.id for DMs."""
+    private_chat = Chat(id=user.id, type="private")
+    return Update(
+        update_id=uid,
+        message=Message(
+            message_id=uid,
+            date=dt.datetime.now(dt.timezone.utc),
+            chat=private_chat,
+            from_user=user,
+            text=text,
         ),
     )
 
@@ -116,23 +152,69 @@ async def run():
     print("PASS  /mystats replied\n" + SENT[0])
 
     SENT.clear()
+    DM_ATTEMPTS.clear()
     uid += 1
     await dp.feed_update(bot, msg(uid, ADMIN, text="/announce Meetup on Friday, 6pm"))
     assert SENT and "ANNOUNCEMENT" in SENT[0], SENT
     assert "@" not in SENT[0], "announcement body itself must stay clean"
     print("PASS  /announce posted\n" + SENT[0])
 
-    # the tag sweep follows, as its own message
+    # DM pass: attempted for all 3 known members (admin, sanni, yasin)
+    assert sorted(DM_ATTEMPTS) == [1, 2, 3], DM_ATTEMPTS
+    print("PASS  DM attempted for all 3 known members")
+
+    # fallback tag pass: only yasin (whose DM Telegram forbade) gets tagged,
+    # in the group, not the two whose DM already succeeded
     tags = SENT[1]
-    assert "@anas" in tags and "@sanni" in tags, tags
-    # Yasin has no username, so he is only pingable via an inline user link
+    assert "@anas" not in tags and "@sanni" not in tags, tags
     assert "tg://user?id=3" in tags, tags
-    print("PASS  tag sweep mentioned all 3 known members\n" + tags)
+    print("PASS  fallback tag hit only the member whose DM failed\n" + tags)
+
+    summary = SENT[2]
+    assert "DMed 2 of 3" in summary and "tagged 1 of 1" in summary, summary
+    print("PASS  admin summary reports the DM/tag split accurately\n" + summary)
 
     # command messages must not inflate the stats
     total = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
     assert total == 10, f"commands leaked into tracking: {total}"
     print("PASS  commands not counted as engagement")
+
+    # --- owner identity bootstrap -----------------------------------------
+    from nomadbot import identity
+
+    FOUNDER = User(id=555, is_bot=False, first_name="David", username="davidnomad")
+    IMPOSTOR = User(id=777, is_bot=False, first_name="Someone", username="davidnomad")
+    RANDOM_MEMBER = User(id=888, is_bot=False, first_name="Random", username="nobody")
+
+    assert not await identity.is_owner(FOUNDER.id)
+    DM_LOG.clear()
+    uid += 1
+    await dp.feed_update(bot, dm(uid, FOUNDER, "hi"))
+    assert await identity.is_owner(FOUNDER.id), "bootstrap username match must bind the owner role"
+    assert DM_LOG and "Registered you as the bot owner" in DM_LOG[-1][1], DM_LOG
+    print("PASS  founder's first DM bound his numeric id as owner")
+
+    # a username change afterwards must not matter — the id is what's pinned
+    uid += 1
+    DM_LOG.clear()
+    await dp.feed_update(bot, dm(uid, FOUNDER, "still me"))
+    assert await identity.is_owner(FOUNDER.id)
+    assert "Command execution" in DM_LOG[-1][1], DM_LOG
+    print("PASS  owner recognised on a later DM purely by numeric id")
+
+    # someone else reusing the same username after the fact must NOT bind
+    uid += 1
+    DM_LOG.clear()
+    await dp.feed_update(bot, dm(uid, IMPOSTOR, "hi, it's me"))
+    assert not await identity.is_owner(IMPOSTOR.id), "owner slot must already be pinned, not re-bindable"
+    print("PASS  a second user with the bootstrap username cannot claim the role")
+
+    # an ordinary member DMing the bot gets no reply at all (out of scope)
+    uid += 1
+    DM_LOG.clear()
+    await dp.feed_update(bot, dm(uid, RANDOM_MEMBER, "hello?"))
+    assert DM_LOG == [], f"random DM should get no reply yet, got {DM_LOG}"
+    print("PASS  a non-owner DM is silently ignored, not answered")
 
     await db.close_db()
     await bot.session.close()
