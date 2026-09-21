@@ -13,7 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
 from nomadbot import config, db, scheduler
-from nomadbot.handlers import announce, diagnostics, owner, stats, tracking
+from nomadbot.handlers import announce, community, diagnostics, owner, stats, tracking
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,15 +32,20 @@ COMMANDS = [
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
 
-    # ORDER MATTERS. tracking.router ends in a catch-all message handler that
-    # matches every group message; if it is attached before the command routers
-    # it swallows /announce and /stats and they stop working with no error.
-    # Keep it last. owner.router is private-chat-only and does not intersect
-    # with the group-only routers, but is kept ahead of the catch-all anyway.
+    # ORDER MATTERS.
+    # - Command routers (announce/stats/diagnostics) must come before
+    #   community.router, or an unrecognised-looking mention could shadow a
+    #   real command.
+    # - owner.router must come before community.router: it raises SkipHandler
+    #   for any private-chat sender who isn't the founder, which is exactly
+    #   what lets community.router's DM handler pick those messages up.
+    # - tracking.router ends in a catch-all that matches every remaining
+    #   group message; it must be LAST or it swallows everything ahead of it.
     dp.include_router(announce.router)
     dp.include_router(stats.router)
     dp.include_router(diagnostics.router)
     dp.include_router(owner.router)
+    dp.include_router(community.router)
     dp.include_router(tracking.router)
 
     return dp
