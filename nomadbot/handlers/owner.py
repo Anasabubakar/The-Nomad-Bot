@@ -21,11 +21,19 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
 from .. import actions, db, identity, scheduler
+from ..ai.persona import PERSONA
 from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
-from ..ai.tools import SYSTEM_PROMPT, TOOLS
+from ..ai.tools import SYSTEM_PROMPT as FUNCTIONAL_RULES
+from ..ai.tools import TOOLS
 from ..util import show_typing
 
 log = logging.getLogger(__name__)
+
+# Persona governs tone; FUNCTIONAL_RULES governs what the model is allowed to
+# do (the tool list, one-call-per-message). Persona comes first but
+# FUNCTIONAL_RULES is what actually constrains behaviour — voice never
+# overrides it.
+SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + FUNCTIONAL_RULES
 
 router = Router(name="owner")
 router.message.filter(F.chat.type == "private")

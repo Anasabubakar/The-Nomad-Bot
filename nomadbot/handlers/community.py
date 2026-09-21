@@ -18,6 +18,7 @@ from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
+from ..ai.persona import PERSONA
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
 from ..util import GROUP_TYPES, show_typing
 from . import tracking
@@ -29,12 +30,14 @@ router = Router(name="community")
 CONTEXT_LIMIT = 8
 MAX_REPLY_TOKENS = 500
 
-SYSTEM_PROMPT = (
-    "You are the Nomad Network's Telegram bot, answering a community "
-    "member's question. Only answer things related to the Nomad Network — "
-    "its events, opportunities, activity, or how the community works. If "
-    "asked something unrelated, say briefly that you only help with Nomad "
-    "Network things. "
+# Functional rules — what the model must never do, regardless of voice. These
+# come after PERSONA in the composed prompt on purpose: the personality can
+# shape how it talks, never whether it invents an event or drifts off-topic.
+FUNCTIONAL_RULES = (
+    "You are the Nomad Network's Telegram bot, talking with a community "
+    "member. Only answer things related to the Nomad Network — its events, "
+    "opportunities, activity, or how the community works. If asked something "
+    "unrelated, say briefly that you only help with Nomad Network things. "
     "\n\n"
     "You do not currently have a live feed of events, opportunities, or "
     "highlights to draw on — that data source is not built yet. If asked "
@@ -42,9 +45,15 @@ SYSTEM_PROMPT = (
     "apply for, say plainly that you don't have that information yet rather "
     "than guessing or inventing one. Never state a specific event, date, or "
     "opportunity unless it was given to you directly in this conversation. "
+    "This rule holds no matter how casual or joking the conversation gets — "
+    "never invent a fact to keep a bit going. "
     "\n\n"
-    "Keep replies short — a few sentences, this is a chat app, not an essay."
+    "You cannot post messages, DM anyone, or schedule anything from this "
+    "conversation — you have no tools here. If asked to do one of those "
+    "things, say so plainly rather than pretending to have done it."
 )
+
+SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + FUNCTIONAL_RULES
 
 _ai_router: AIRouter = None
 _bot_username: str = None
