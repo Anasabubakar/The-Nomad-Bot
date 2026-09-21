@@ -194,13 +194,15 @@ async def run():
     assert DM_LOG and "Registered you as the bot owner" in DM_LOG[-1][1], DM_LOG
     print("PASS  founder's first DM bound his numeric id as owner")
 
-    # a username change afterwards must not matter — the id is what's pinned
+    # a username change afterwards must not matter — the id is what's pinned.
+    # No AI keys are set in this test environment, so the owner engine must
+    # degrade gracefully rather than crash or hang.
     uid += 1
     DM_LOG.clear()
     await dp.feed_update(bot, dm(uid, FOUNDER, "still me"))
     assert await identity.is_owner(FOUNDER.id)
-    assert "Command execution" in DM_LOG[-1][1], DM_LOG
-    print("PASS  owner recognised on a later DM purely by numeric id")
+    assert "No AI provider is configured" in DM_LOG[-1][1], DM_LOG
+    print("PASS  owner recognised by numeric id; no-AI-configured degrades cleanly, no hang")
 
     # someone else reusing the same username after the fact must NOT bind
     uid += 1
