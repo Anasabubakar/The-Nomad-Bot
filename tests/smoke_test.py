@@ -160,6 +160,33 @@ async def run():
     assert SENT and "Rank in group" in SENT[0], SENT
     print("PASS  /mystats replied\n" + SENT[0])
 
+    # --- /mystats via DM: aggregated across every group, not just one -----
+    CHAT2 = Chat(id=-1009876543210, type="group", title="Event Drops")
+    for _ in range(2):
+        uid += 1
+        await dp.feed_update(
+            bot,
+            Update(
+                update_id=uid,
+                message=Message(
+                    message_id=uid,
+                    date=dt.datetime.now(dt.timezone.utc),
+                    chat=CHAT2,
+                    from_user=MEMBERS[0],
+                    text="hi from the other group",
+                ),
+            ),
+        )
+    # Sanni now has 4 messages in CHAT and 2 in CHAT2 = 6 total, 2 groups
+    DM_LOG.clear()
+    uid += 1
+    await dp.feed_update(bot, dm(uid, MEMBERS[0], "/mystats"))
+    reply = DM_LOG[-1][1]
+    assert "Messages: <b>6</b>" in reply, reply
+    assert "across <b>2</b> groups" in reply, reply
+    assert "across the community" in reply, reply
+    print("PASS  /mystats in DM aggregates across every tracked group\n" + reply)
+
     SENT.clear()
     DM_ATTEMPTS.clear()
     uid += 1
@@ -177,9 +204,10 @@ async def run():
     assert "tg://user?id=3" in tags, tags
     print("PASS  /announce tag sweep mentioned all 3 known members, in-group, no DMs\n" + tags)
 
-    # command messages must not inflate the stats
+    # command messages must not inflate the stats. Baseline is 12, not 10:
+    # the /mystats-via-DM block above added 2 messages in CHAT2.
     total = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
-    assert total == 10, f"commands leaked into tracking: {total}"
+    assert total == 12, f"commands leaked into tracking: {total}"
     print("PASS  commands not counted as engagement")
 
     # --- community Q&A: @mention in the group ------------------------------
@@ -192,7 +220,7 @@ async def run():
     await dp.feed_update(bot, msg(uid, MEMBERS[0], text="@the_nomadbot what events can I attend?"))
     assert SENT == [], f"no AI configured in this test env, so no reply should be sent: {SENT}"
     total_after_mention = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
-    assert total_after_mention == 11, f"the mention itself should still count as engagement: {total_after_mention}"
+    assert total_after_mention == 13, f"the mention itself should still count as engagement: {total_after_mention}"
     print("PASS  group @mention resolves the bot's username without crashing, and still counts as engagement")
 
     # an ordinary message with no mention must still reach tracking normally
@@ -200,7 +228,7 @@ async def run():
     uid += 1
     await dp.feed_update(bot, msg(uid, MEMBERS[1], text="just chatting, no mention here"))
     total_after_plain = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
-    assert total_after_plain == 12, total_after_plain
+    assert total_after_plain == 14, total_after_plain
     print("PASS  a plain group message still falls through to tracking as before")
 
     # --- owner identity bootstrap -----------------------------------------
