@@ -7,6 +7,7 @@ adding content retention later is a separate decision for them to make, not a
 gap to quietly fill in.
 """
 
+import json
 import time
 from typing import Optional
 
@@ -52,6 +53,24 @@ CREATE TABLE IF NOT EXISTS owner (
     username    TEXT,
     resolved_at INTEGER NOT NULL
 );
+
+-- Recurring or one-off actions the founder scheduled via DM. cron_expr drives
+-- the next_run_ts computation (see nomadbot/scheduler.py); one_off rows have
+-- next_run_ts set once and active flips to 0 after their single run.
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    cron_expr    TEXT,
+    one_off      INTEGER NOT NULL DEFAULT 0,
+    action_type  TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_by   INTEGER NOT NULL,
+    next_run_ts  INTEGER NOT NULL,
+    last_run_ts  INTEGER,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_active_next_run ON scheduled_jobs (active, next_run_ts);
 """
 
 
@@ -262,6 +281,104 @@ async def user_summary(chat_id: int, user_id: int, days: int) -> dict:
         row["first_seen"] = seen["first_seen"] if seen else None
 
     return row
+
+
+async def find_member(identifier: str) -> Optional[dict]:
+    """Look up a member by numeric id or by @username, across any chat.
+
+    Telegram's Bot API cannot resolve a bare username into a user_id for
+    DMing purposes — it only works if the bot has already seen that user
+    somewhere. This is that "somewhere": if the bot has ever recorded them
+    (in any of the community's groups), this finds them; if not, there is no
+    way to DM them until they show up in a group the bot is in.
+    """
+    identifier = identifier.strip().lstrip("@")
+    if identifier.isdigit():
+        async with _conn().execute(
+            "SELECT * FROM members WHERE user_id = ? ORDER BY last_seen DESC LIMIT 1",
+            (int(identifier),),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async with _conn().execute(
+        "SELECT * FROM members WHERE username = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1",
+        (identifier,),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def create_scheduled_job(
+    action_type: str,
+    payload: dict,
+    created_by: int,
+    next_run_ts: int,
+    cron_expr: Optional[str] = None,
+    one_off: bool = False,
+) -> int:
+    cur = await _conn().execute(
+        """
+        INSERT INTO scheduled_jobs
+            (cron_expr, one_off, action_type, payload_json, created_by, next_run_ts, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (cron_expr, int(one_off), action_type, json.dumps(payload), created_by, next_run_ts, now()),
+    )
+    await _conn().commit()
+    return cur.lastrowid
+
+
+async def due_jobs(at_ts: Optional[int] = None) -> list:
+    at_ts = at_ts if at_ts is not None else now()
+    async with _conn().execute(
+        "SELECT * FROM scheduled_jobs WHERE active = 1 AND next_run_ts <= ? ORDER BY next_run_ts",
+        (at_ts,),
+    ) as cur:
+        rows = [dict(r) for r in await cur.fetchall()]
+    for row in rows:
+        row["payload"] = json.loads(row["payload_json"])
+    return rows
+
+
+async def list_active_jobs(created_by: Optional[int] = None) -> list:
+    if created_by is not None:
+        query = "SELECT * FROM scheduled_jobs WHERE active = 1 AND created_by = ? ORDER BY next_run_ts"
+        params = (created_by,)
+    else:
+        query = "SELECT * FROM scheduled_jobs WHERE active = 1 ORDER BY next_run_ts"
+        params = ()
+    async with _conn().execute(query, params) as cur:
+        rows = [dict(r) for r in await cur.fetchall()]
+    for row in rows:
+        row["payload"] = json.loads(row["payload_json"])
+    return rows
+
+
+async def mark_job_run(job_id: int, next_run_ts: Optional[int]) -> None:
+    """next_run_ts=None deactivates the job — used for one-off jobs after
+    their single run, and for jobs whose cron expression is somehow exhausted."""
+    if next_run_ts is None:
+        await _conn().execute(
+            "UPDATE scheduled_jobs SET active = 0, last_run_ts = ? WHERE id = ?",
+            (now(), job_id),
+        )
+    else:
+        await _conn().execute(
+            "UPDATE scheduled_jobs SET next_run_ts = ?, last_run_ts = ? WHERE id = ?",
+            (next_run_ts, now(), job_id),
+        )
+    await _conn().commit()
+
+
+async def cancel_job(job_id: int, created_by: int) -> bool:
+    """Only the job's own creator can cancel it. Returns whether a row changed."""
+    cur = await _conn().execute(
+        "UPDATE scheduled_jobs SET active = 0 WHERE id = ? AND created_by = ? AND active = 1",
+        (job_id, created_by),
+    )
+    await _conn().commit()
+    return cur.rowcount > 0
 
 
 async def get_owner_id() -> Optional[int]:
