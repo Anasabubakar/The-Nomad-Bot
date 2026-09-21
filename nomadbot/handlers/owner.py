@@ -9,9 +9,9 @@ scheduled job uses when it comes due, so there is exactly one implementation
 of "post to a group" or "DM a member", not a live version and a separate
 scheduled version that can drift apart.
 
-Conversation context is kept in memory only, capped at a small rolling
-window, and is lost on restart. That is a real limitation, not hidden: no
-durable store of the founder's own DM text exists yet.
+Conversation memory is persistent — see nomadbot/memory.py — so this
+survives restarts and folds older turns into a rolling summary rather than
+either losing them or resending an ever-growing history forever.
 """
 
 import logging
@@ -20,7 +20,7 @@ from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
-from .. import actions, db, identity, scheduler
+from .. import actions, db, identity, memory, scheduler
 from ..ai.persona import PERSONA
 from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
 from ..ai.tools import SYSTEM_PROMPT as FUNCTIONAL_RULES
@@ -38,10 +38,9 @@ SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + FUNCTIONAL_RULES
 router = Router(name="owner")
 router.message.filter(F.chat.type == "private")
 
-CONTEXT_LIMIT = 12
+MEMORY_CHANNEL = "owner"
 
 _ai_router: AIRouter = None
-_context: list = []
 
 
 def _get_ai_router() -> AIRouter:
@@ -49,11 +48,6 @@ def _get_ai_router() -> AIRouter:
     if _ai_router is None:
         _ai_router = AIRouter(build_provider_chain())
     return _ai_router
-
-
-def _remember(role: str, content: str) -> None:
-    _context.append({"role": role, "content": content})
-    del _context[:-CONTEXT_LIMIT]
 
 
 async def _schedule_task(owner_id: int, args: dict) -> str:
@@ -132,8 +126,9 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
         )
         return
 
-    _remember("user", message.text or "")
-    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + _context
+    await memory.remember(MEMORY_CHANNEL, message.chat.id, user_id, "user", message.text or "")
+    history = await memory.build_prompt_messages(MEMORY_CHANNEL, message.chat.id, user_id, ai_router)
+    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + history
 
     async with show_typing(bot, message.chat.id):
         try:
@@ -147,7 +142,10 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
         for call in result.tool_calls:
             outcome = await dispatch_tool_call(bot, user_id, call)
             await message.reply(outcome)
-        _remember("assistant", f"[called {result.tool_calls[0].name}]")
+        await memory.remember(
+            MEMORY_CHANNEL, message.chat.id, user_id, "assistant",
+            f"[called {result.tool_calls[0].name}]",
+        )
     else:
         await message.reply(result.text)
-        _remember("assistant", result.text)
+        await memory.remember(MEMORY_CHANNEL, message.chat.id, user_id, "assistant", result.text)

@@ -18,6 +18,7 @@ from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
+from .. import memory
 from ..ai.persona import PERSONA
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
 from ..util import GROUP_TYPES, show_typing
@@ -27,7 +28,7 @@ log = logging.getLogger(__name__)
 
 router = Router(name="community")
 
-CONTEXT_LIMIT = 8
+MEMORY_CHANNEL = "community"
 MAX_REPLY_TOKENS = 500
 
 # Functional rules — what the model must never do, regardless of voice. These
@@ -57,7 +58,6 @@ SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + FUNCTIONAL_RULES
 
 _ai_router: AIRouter = None
 _bot_username: str = None
-_contexts: dict = {}  # (chat_id, user_id) -> list of {"role","content"}
 
 
 def _get_ai_router() -> AIRouter:
@@ -73,12 +73,6 @@ async def _get_bot_username(bot: Bot) -> str:
         me = await bot.get_me()
         _bot_username = me.username
     return _bot_username
-
-
-def _remember(key: tuple, role: str, content: str) -> None:
-    history = _contexts.setdefault(key, [])
-    history.append({"role": role, "content": content})
-    del history[:-CONTEXT_LIMIT]
 
 
 def is_addressed_to_bot(message: Message, bot_username: str) -> bool:
@@ -110,8 +104,10 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
         log.info("community question received but no AI provider is configured")
         return
 
-    _remember(key, "user", question)
-    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + _contexts[key]
+    chat_id, user_id = key
+    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "user", question)
+    history = await memory.build_prompt_messages(MEMORY_CHANNEL, chat_id, user_id, ai_router)
+    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + history
 
     async with show_typing(bot, message.chat.id, message.message_thread_id):
         try:
@@ -122,7 +118,7 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
             return
 
     await message.reply(result.text)
-    _remember(key, "assistant", result.text)
+    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "assistant", result.text)
 
 
 @router.message(F.chat.type.in_(GROUP_TYPES))
