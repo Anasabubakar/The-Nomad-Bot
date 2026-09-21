@@ -283,6 +283,49 @@ async def user_summary(chat_id: int, user_id: int, days: int) -> dict:
     return row
 
 
+async def community_user_summary(user_id: int, days: int) -> dict:
+    """Same idea as user_summary, but aggregated across every group the bot
+    tracks rather than one chat. Used for /mystats in a DM, where there's no
+    single chat to scope to — a member active in three of the community's
+    groups should see all three counted, not just whichever one they last
+    posted in."""
+    cutoff = _cutoff(days)
+    async with _conn().execute(
+        """
+        SELECT COUNT(*) AS msgs,
+               COALESCE(SUM(has_media), 0) AS media,
+               COALESCE(SUM(is_reply), 0) AS replies,
+               COUNT(DISTINCT CAST(ts / 86400 AS INTEGER)) AS active_days,
+               COUNT(DISTINCT chat_id) AS active_chats
+        FROM messages WHERE user_id = ? AND ts >= ?
+        """,
+        (user_id, cutoff),
+    ) as cur:
+        row = dict(await cur.fetchone())
+
+    async with _conn().execute(
+        """
+        SELECT COUNT(*) + 1 AS rank FROM (
+            SELECT user_id, COUNT(*) AS c FROM messages
+            WHERE ts >= ? GROUP BY user_id
+        ) WHERE c > (
+            SELECT COUNT(*) FROM messages WHERE user_id = ? AND ts >= ?
+        )
+        """,
+        (cutoff, user_id, cutoff),
+    ) as cur:
+        row["rank"] = (await cur.fetchone())["rank"]
+
+    async with _conn().execute(
+        "SELECT MIN(first_seen) AS first_seen FROM members WHERE user_id = ?",
+        (user_id,),
+    ) as cur:
+        seen = await cur.fetchone()
+        row["first_seen"] = seen["first_seen"] if seen else None
+
+    return row
+
+
 async def find_member(identifier: str) -> Optional[dict]:
     """Look up a member by numeric id or by @username, across any chat.
 
