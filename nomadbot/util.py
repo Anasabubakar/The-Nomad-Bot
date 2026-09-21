@@ -1,9 +1,26 @@
 """Small shared helpers."""
 
+import logging
 from html import escape
 from typing import Optional
 
+from aiogram import Bot
+from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+log = logging.getLogger(__name__)
+
 GROUP_TYPES = {"group", "supergroup"}
+ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+
+
+async def is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        log.warning("admin check failed for %s in %s: %s", user_id, chat_id, exc)
+        return False
+    return member.status in ADMIN_STATUSES
 
 
 def display_name(

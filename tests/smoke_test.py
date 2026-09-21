@@ -159,20 +159,14 @@ async def run():
     assert "@" not in SENT[0], "announcement body itself must stay clean"
     print("PASS  /announce posted\n" + SENT[0])
 
-    # DM pass: attempted for all 3 known members (admin, sanni, yasin)
-    assert sorted(DM_ATTEMPTS) == [1, 2, 3], DM_ATTEMPTS
-    print("PASS  DM attempted for all 3 known members")
-
-    # fallback tag pass: only yasin (whose DM Telegram forbade) gets tagged,
-    # in the group, not the two whose DM already succeeded
+    # /announce tags in the group only — no DMs. DMing a specific person is a
+    # separate, owner-triggered capability, not something /announce does.
+    assert DM_ATTEMPTS == [], f"/announce must not DM anyone: {DM_ATTEMPTS}"
     tags = SENT[1]
-    assert "@anas" not in tags and "@sanni" not in tags, tags
+    assert "@anas" in tags and "@sanni" in tags, tags
+    # Yasin has no username, so he is only pingable via an inline user link
     assert "tg://user?id=3" in tags, tags
-    print("PASS  fallback tag hit only the member whose DM failed\n" + tags)
-
-    summary = SENT[2]
-    assert "DMed 2 of 3" in summary and "tagged 1 of 1" in summary, summary
-    print("PASS  admin summary reports the DM/tag split accurately\n" + summary)
+    print("PASS  /announce tag sweep mentioned all 3 known members, in-group, no DMs\n" + tags)
 
     # command messages must not inflate the stats
     total = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
