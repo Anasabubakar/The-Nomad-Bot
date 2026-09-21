@@ -17,6 +17,7 @@ durable store of the founder's own DM text exists yet.
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
 from .. import actions, db, identity, scheduler
@@ -106,10 +107,12 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
                 "pinned to this role, so it stays yours even if your @username "
                 "changes later."
             )
-        # Not the bootstrap identity and not already owner: no response.
-        # DMs from other members are out of scope until the community
-        # Q&A handler exists.
-        return
+            return
+        # Not the bootstrap identity and not already owner: this is an
+        # ordinary member DMing the bot, not a command. Defer to
+        # community.router, registered right after this one, instead of
+        # silently swallowing it.
+        raise SkipHandler
 
     ai_router = _get_ai_router()
     if not ai_router.configured:
