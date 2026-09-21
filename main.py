@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
-from nomadbot import config, db
+from nomadbot import config, db, scheduler
 from nomadbot.handlers import announce, diagnostics, owner, stats, tracking
 
 logging.basicConfig(
@@ -66,10 +66,13 @@ async def main() -> None:
     allowed = dp.resolve_used_update_types()
     log.info("subscribed update types: %s", ", ".join(allowed))
 
+    scheduler_task = asyncio.create_task(scheduler.scheduler_loop(bot))
+
     try:
         log.info("Starting polling...")
         await dp.start_polling(bot, allowed_updates=allowed)
     finally:
+        scheduler_task.cancel()
         await db.close_db()
         await bot.session.close()
 

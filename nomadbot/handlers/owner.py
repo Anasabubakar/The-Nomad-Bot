@@ -1,30 +1,96 @@
-"""Owner DM gate.
+"""Owner DM channel: natural language in, an action out.
 
-Registers the founder's numeric Telegram id on first contact (see
-nomadbot/identity.py for why it works this way) and confirms it back to him.
+Identity is gated first (see nomadbot/identity.py) — only the founder's
+pinned numeric id gets here. Once past that gate, his messages go to the AI
+router with a small, explicit tool list (nomadbot/ai/tools.py): the model
+either calls one of those tools or just replies in text, nothing implicit.
+Tool calls execute through nomadbot/actions.py, the same code path a
+scheduled job uses when it comes due, so there is exactly one implementation
+of "post to a group" or "DM a member", not a live version and a separate
+scheduled version that can drift apart.
 
-This is the identity layer only. Parsing his free-text instructions into
-actions — schedule a trivia, tag someone, post to a specific group — is a
-separate, not-yet-built engine; see the module docstring in
-nomadbot/ai/providers.py for the router it will sit on top of. This handler
-does not pretend to execute commands it cannot yet run.
+Conversation context is kept in memory only, capped at a small rolling
+window, and is lost on restart. That is a real limitation, not hidden: no
+durable store of the founder's own DM text exists yet.
 """
 
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.types import Message
 
-from .. import identity
+from .. import actions, db, identity, scheduler
+from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
+from ..ai.tools import SYSTEM_PROMPT, TOOLS
 
 log = logging.getLogger(__name__)
 
 router = Router(name="owner")
 router.message.filter(F.chat.type == "private")
 
+CONTEXT_LIMIT = 12
+
+_ai_router: AIRouter = None
+_context: list = []
+
+
+def _get_ai_router() -> AIRouter:
+    global _ai_router
+    if _ai_router is None:
+        _ai_router = AIRouter(build_provider_chain())
+    return _ai_router
+
+
+def _remember(role: str, content: str) -> None:
+    _context.append({"role": role, "content": content})
+    del _context[:-CONTEXT_LIMIT]
+
+
+async def _schedule_task(owner_id: int, args: dict) -> str:
+    action_type = args.get("action_type")
+    payload = args.get("action_payload")
+    if not action_type or payload is None:
+        return "Need both an action_type and action_payload to schedule anything."
+
+    cron_expr = args.get("cron_expr")
+    run_at = args.get("run_at_unix_ts")
+
+    if cron_expr:
+        next_run = scheduler.compute_next_run(cron_expr, db.now())
+        job_id = await db.create_scheduled_job(
+            action_type, payload, owner_id, next_run, cron_expr=cron_expr
+        )
+        return f"Scheduled #{job_id}: {action_type} on cron '{cron_expr}'."
+    if run_at:
+        job_id = await db.create_scheduled_job(
+            action_type, payload, owner_id, int(run_at), one_off=True
+        )
+        return f"Scheduled #{job_id}: {action_type}, one-off."
+    return "Need either cron_expr (recurring) or run_at_unix_ts (one-off) to schedule this."
+
+
+async def dispatch_tool_call(bot: Bot, owner_id: int, call: ToolCall) -> str:
+    """Exposed at module level so it can be unit tested directly, without
+    going through a fake Telegram update for every case."""
+    args = call.arguments
+    try:
+        if call.name == "send_message":
+            return await actions.send_message_to_group(bot, args["destination"], args["text"])
+        if call.name == "dm_member":
+            return await actions.dm_member(bot, args["identifier"], args["text"])
+        if call.name == "schedule_task":
+            return await _schedule_task(owner_id, args)
+        if call.name == "list_scheduled_tasks":
+            return await actions.list_scheduled_tasks(owner_id)
+        if call.name == "cancel_scheduled_task":
+            return await actions.cancel_scheduled_task(int(args["job_id"]), owner_id)
+    except KeyError as exc:
+        return f"'{call.name}' is missing a required argument: {exc}"
+    return f"Unknown tool '{call.name}' — nothing executed."
+
 
 @router.message()
-async def on_owner_dm(message: Message) -> None:
+async def on_owner_dm(message: Message, bot: Bot) -> None:
     if message.from_user is None:
         return
 
@@ -45,8 +111,30 @@ async def on_owner_dm(message: Message) -> None:
         # Q&A handler exists.
         return
 
-    await message.reply(
-        "Got it — logged. Command execution (scheduling, tagging, posting to "
-        "specific groups) is not wired up yet; this DM channel currently only "
-        "confirms who you are."
-    )
+    ai_router = _get_ai_router()
+    if not ai_router.configured:
+        await message.reply(
+            "No AI provider is configured yet, so I can't act on that. Set "
+            "GEMINI_API_KEY, GROQ_API_KEY, or CUSTOM_AI_BASE_URL/"
+            "CUSTOM_AI_API_KEY/CUSTOM_AI_MODEL on the server first."
+        )
+        return
+
+    _remember("user", message.text or "")
+    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + _context
+
+    try:
+        result = await ai_router.complete(conversation, tools=TOOLS)
+    except AllProvidersFailedError as exc:
+        log.error("owner command failed, all providers down: %s", exc)
+        await message.reply("Every AI provider failed just now — try again shortly.")
+        return
+
+    if result.tool_calls:
+        for call in result.tool_calls:
+            outcome = await dispatch_tool_call(bot, user_id, call)
+            await message.reply(outcome)
+        _remember("assistant", f"[called {result.tool_calls[0].name}]")
+    else:
+        await message.reply(result.text)
+        _remember("assistant", result.text)
