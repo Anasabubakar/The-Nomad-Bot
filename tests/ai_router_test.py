@@ -11,26 +11,44 @@ from nomadbot.ai.providers import (
     AllProvidersFailedError,
     AIRouter,
     Provider,
+    ToolCall,
     build_provider_chain,
 )
 
 
-def _reply(text):
-    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+def _reply(text=None, tool_calls=None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=text, tool_calls=tool_calls))]
+    )
+
+
+def _fake_tool_call(call_id, name, arguments_json):
+    return SimpleNamespace(
+        id=call_id, function=SimpleNamespace(name=name, arguments=arguments_json)
+    )
 
 
 class FakeCompletions:
     def __init__(self, behavior):
-        self._behavior = behavior  # "ok" | "empty" | "error"
+        self._behavior = behavior  # "ok" | "empty" | "error" | "tool_call" | "bad_tool_json"
         self.calls = 0
+        self.last_kwargs = None
 
     async def create(self, **kwargs):
         self.calls += 1
+        self.last_kwargs = kwargs
         if self._behavior == "error":
             raise RuntimeError("simulated provider outage")
         if self._behavior == "empty":
             return _reply("")
-        return _reply(f"reply via {kwargs['model']}")
+        if self._behavior == "tool_call":
+            return _reply(
+                text=None,
+                tool_calls=[_fake_tool_call("call_1", "send_message", '{"destination": "lounge", "text": "hi"}')],
+            )
+        if self._behavior == "bad_tool_json":
+            return _reply(text=None, tool_calls=[_fake_tool_call("call_2", "noop", "not json")])
+        return _reply(text=f"reply via {kwargs['model']}")
 
 
 class FakeClient:
@@ -106,6 +124,32 @@ async def run():
     except AllProvidersFailedError:
         pass
     print("PASS  unconfigured router raises a clear error instead of hanging")
+
+    # --- tool calling: empty content + a tool call is a valid reply, not empty
+    router = make_router({"gemini": "tool_call"})
+    result = await router.complete([{"role": "user", "content": "post hi to lounge"}], tools=[{"type": "function"}])
+    assert result.text == "", result
+    assert result.tool_calls == [
+        ToolCall(id="call_1", name="send_message", arguments={"destination": "lounge", "text": "hi"})
+    ], result.tool_calls
+    print("PASS  tool call with empty text is not treated as a failed reply")
+
+    # tools kwarg must actually reach the underlying API call
+    client = router._clients["gemini"]
+    assert "tools" in client.chat.completions.last_kwargs, client.chat.completions.last_kwargs
+    print("PASS  tools schema is forwarded to the provider call")
+
+    # unparseable tool arguments degrade to {} rather than crashing the router
+    router = make_router({"gemini": "bad_tool_json"})
+    result = await router.complete([{"role": "user", "content": "x"}], tools=[{"type": "function"}])
+    assert result.tool_calls[0].arguments == {}, result.tool_calls
+    print("PASS  malformed tool-call arguments degrade to {} instead of crashing")
+
+    # without a tools kwarg, nothing extra is sent to the provider
+    router = make_router({"gemini": "ok"})
+    await router.complete([{"role": "user", "content": "hi"}])
+    assert "tools" not in router._clients["gemini"].chat.completions.last_kwargs
+    print("PASS  tools kwarg is omitted entirely when not requested")
 
 
 asyncio.run(run())

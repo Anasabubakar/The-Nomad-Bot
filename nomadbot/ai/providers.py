@@ -14,7 +14,7 @@ never surface as an error to a group member — it should just fall through.
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from openai import AsyncOpenAI
@@ -38,9 +38,17 @@ class Provider:
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass(frozen=True)
 class AIResult:
     text: str
     provider: str
+    tool_calls: list = field(default_factory=list)
 
 
 class AllProvidersFailedError(RuntimeError):
@@ -132,6 +140,7 @@ class AIRouter:
         self,
         messages: list,
         *,
+        tools: Optional[list] = None,
         temperature: float = 0.4,
         max_tokens: int = 800,
     ) -> AIResult:
@@ -140,6 +149,8 @@ class AIRouter:
                 "no AI provider is configured — set GEMINI_API_KEY, GROQ_API_KEY, "
                 "or CUSTOM_AI_BASE_URL/CUSTOM_AI_API_KEY/CUSTOM_AI_MODEL"
             )
+
+        extra = {"tools": tools} if tools else {}
 
         failures = []
         for provider in self._providers:
@@ -150,6 +161,7 @@ class AIRouter:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **extra,
                 )
             except Exception as exc:  # noqa: BLE001 - a fallback boundary must
                 # never let one provider's failure mode (SDK error, network
@@ -158,13 +170,31 @@ class AIRouter:
                 failures.append(f"{provider.name}: {exc}")
                 continue
 
-            text = (response.choices[0].message.content or "").strip()
-            if not text:
+            choice_message = response.choices[0].message
+            text = (choice_message.content or "").strip()
+            raw_tool_calls = getattr(choice_message, "tool_calls", None) or []
+
+            tool_calls = []
+            for raw in raw_tool_calls:
+                try:
+                    args = json.loads(raw.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    log.warning(
+                        "provider %s returned unparseable tool arguments for %s: %r",
+                        provider.name, raw.function.name, raw.function.arguments,
+                    )
+                    args = {}
+                tool_calls.append(ToolCall(id=raw.id, name=raw.function.name, arguments=args))
+
+            # a reply is usable if it has either text or at least one tool
+            # call — an assistant that only wants to call a tool legitimately
+            # sends empty content, that is not the same as a broken response
+            if not text and not tool_calls:
                 log.warning("provider %s returned an empty reply", provider.name)
                 failures.append(f"{provider.name}: empty reply")
                 continue
 
-            return AIResult(text=text, provider=provider.name)
+            return AIResult(text=text, provider=provider.name, tool_calls=tool_calls)
 
         raise AllProvidersFailedError(
             f"all {len(self._providers)} provider(s) failed: " + "; ".join(failures)
