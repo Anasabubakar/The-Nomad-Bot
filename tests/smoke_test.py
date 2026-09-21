@@ -137,6 +137,12 @@ async def run():
     assert not any(c in cols for c in ("text", "content", "body")), cols
     print("PASS  no message-content column exists:", cols)
 
+    SENT.clear()
+    uid += 1
+    await dp.feed_update(bot, msg(uid, ADMIN, text="/whereami"))
+    assert SENT and str(CHAT.id) in SENT[0], SENT
+    print("PASS  /whereami reports this chat's numeric id\n" + SENT[0])
+
     # the real ordering test: does the catch-all swallow commands?
     SENT.clear()
     uid += 1

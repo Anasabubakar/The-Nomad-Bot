@@ -13,7 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
 from nomadbot import config, db
-from nomadbot.handlers import announce, owner, stats, tracking
+from nomadbot.handlers import announce, diagnostics, owner, stats, tracking
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +25,7 @@ COMMANDS = [
     BotCommand(command="announce", description="Post an announcement (admins only)"),
     BotCommand(command="stats", description="Group engagement, last 7 days"),
     BotCommand(command="mystats", description="Your own activity, last 30 days"),
+    BotCommand(command="whereami", description="Show this chat's numeric id (admins only)"),
 ]
 
 
@@ -38,6 +39,7 @@ def build_dispatcher() -> Dispatcher:
     # with the group-only routers, but is kept ahead of the catch-all anyway.
     dp.include_router(announce.router)
     dp.include_router(stats.router)
+    dp.include_router(diagnostics.router)
     dp.include_router(owner.router)
     dp.include_router(tracking.router)
 
