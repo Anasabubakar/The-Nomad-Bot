@@ -22,8 +22,19 @@ from openai import AsyncOpenAI
 log = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 20
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+# "gemini-flash-latest" is an alias Google maintains to always point at their
+# current flash-tier model, chosen deliberately over a pinned version number
+# (gemini-2.0-flash, the original default here, was retired and returned a
+# 404 in production). Override with GEMINI_MODEL if a specific version is
+# ever needed instead.
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+
+# Groq's catalog churns fast and has no equivalent "-latest" alias; verified
+# working (chat + tool-calling) against the live API as of 2026-09-21.
+# Override with GROQ_MODEL if this one gets retired too.
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
