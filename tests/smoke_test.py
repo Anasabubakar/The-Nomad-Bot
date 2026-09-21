@@ -18,7 +18,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramForbiddenError
-from aiogram.methods import GetChatMember, PinChatMessage, SendMessage
+from aiogram.methods import GetChatMember, GetMe, PinChatMessage, SendMessage
 from aiogram.types import Chat, ChatMemberOwner, Message, Update, User
 
 import main
@@ -29,6 +29,7 @@ DM_ATTEMPTS = []  # every DM attempt, successful or not, as user_id
 DM_LOG = []  # (chat_id, text) for every DM attempt, for content assertions
 CHAT = Chat(id=-1001234567890, type="supergroup", title="Nomad Network")
 ADMIN = User(id=1, is_bot=False, first_name="Anas", username="anas")
+BOT_USER = User(id=8812582070, is_bot=True, first_name="Nomad Bot", username="the_nomadbot")
 MEMBERS = [
     User(id=2, is_bot=False, first_name="Sanni", username="sanni"),
     User(id=3, is_bot=False, first_name="Yasin", last_name="K"),
@@ -72,6 +73,8 @@ class FakeSession(BaseSession):
             return ChatMemberOwner(user=ADMIN, is_anonymous=False, status="creator")
         if isinstance(method, PinChatMessage):
             return True
+        if isinstance(method, GetMe):
+            return BOT_USER
         raise AssertionError(f"unexpected API call: {type(method).__name__}")
 
 
@@ -178,6 +181,27 @@ async def run():
     total = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
     assert total == 10, f"commands leaked into tracking: {total}"
     print("PASS  commands not counted as engagement")
+
+    # --- community Q&A: @mention in the group ------------------------------
+    # No AI keys are set in this test env, so no reply is expected — but the
+    # question itself must still count as engagement (community.py logs it
+    # via tracking.record_group_message before checking whether AI is
+    # configured), and it must not crash resolving the bot's own username.
+    SENT.clear()
+    uid += 1
+    await dp.feed_update(bot, msg(uid, MEMBERS[0], text="@the_nomadbot what events can I attend?"))
+    assert SENT == [], f"no AI configured in this test env, so no reply should be sent: {SENT}"
+    total_after_mention = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
+    assert total_after_mention == 11, f"the mention itself should still count as engagement: {total_after_mention}"
+    print("PASS  group @mention resolves the bot's username without crashing, and still counts as engagement")
+
+    # an ordinary message with no mention must still reach tracking normally
+    # (falls through community.router via SkipHandler)
+    uid += 1
+    await dp.feed_update(bot, msg(uid, MEMBERS[1], text="just chatting, no mention here"))
+    total_after_plain = (await db._conn().execute_fetchall("SELECT COUNT(*) c FROM messages"))[0]["c"]
+    assert total_after_plain == 12, total_after_plain
+    print("PASS  a plain group message still falls through to tracking as before")
 
     # --- owner identity bootstrap -----------------------------------------
     from nomadbot import identity
