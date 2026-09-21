@@ -19,7 +19,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
-from ..util import GROUP_TYPES
+from ..util import GROUP_TYPES, show_typing
 from . import tracking
 
 log = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ def _strip_mention(text: str, bot_username: str) -> str:
     return text.replace(f"@{bot_username}", "").strip() if text else text
 
 
-async def _answer(message: Message, question: str, key: tuple, log_group_activity: bool) -> None:
+async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_group_activity: bool) -> None:
     if log_group_activity:
         await tracking.record_group_message(message)
 
@@ -104,12 +104,13 @@ async def _answer(message: Message, question: str, key: tuple, log_group_activit
     _remember(key, "user", question)
     conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + _contexts[key]
 
-    try:
-        result = await ai_router.complete(conversation, max_tokens=MAX_REPLY_TOKENS)
-    except AllProvidersFailedError as exc:
-        log.error("community Q&A failed, all providers down: %s", exc)
-        await message.reply("Couldn't get an answer just now — try again shortly.")
-        return
+    async with show_typing(bot, message.chat.id, message.message_thread_id):
+        try:
+            result = await ai_router.complete(conversation, max_tokens=MAX_REPLY_TOKENS)
+        except AllProvidersFailedError as exc:
+            log.error("community Q&A failed, all providers down: %s", exc)
+            await message.reply("Couldn't get an answer just now — try again shortly.")
+            return
 
     await message.reply(result.text)
     _remember(key, "assistant", result.text)
@@ -125,15 +126,15 @@ async def on_group_mention(message: Message, bot: Bot) -> None:
 
     question = _strip_mention(message.text or message.caption or "", bot_username)
     key = (message.chat.id, message.from_user.id if message.from_user else 0)
-    await _answer(message, question, key, log_group_activity=True)
+    await _answer(bot, message, question, key, log_group_activity=True)
 
 
 @router.message(F.chat.type == "private")
-async def on_member_dm(message: Message) -> None:
+async def on_member_dm(message: Message, bot: Bot) -> None:
     """Reached only for non-owner DMs — owner.router raises SkipHandler to
     get here for anyone who isn't the founder (see handlers/owner.py)."""
     if message.from_user is None:
         return
     question = message.text or ""
     key = (message.chat.id, message.from_user.id)
-    await _answer(message, question, key, log_group_activity=False)
+    await _answer(bot, message, question, key, log_group_activity=False)

@@ -23,6 +23,7 @@ from aiogram.types import Message
 from .. import actions, db, identity, scheduler
 from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
 from ..ai.tools import SYSTEM_PROMPT, TOOLS
+from ..util import show_typing
 
 log = logging.getLogger(__name__)
 
@@ -126,12 +127,13 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
     _remember("user", message.text or "")
     conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + _context
 
-    try:
-        result = await ai_router.complete(conversation, tools=TOOLS)
-    except AllProvidersFailedError as exc:
-        log.error("owner command failed, all providers down: %s", exc)
-        await message.reply("Every AI provider failed just now — try again shortly.")
-        return
+    async with show_typing(bot, message.chat.id):
+        try:
+            result = await ai_router.complete(conversation, tools=TOOLS)
+        except AllProvidersFailedError as exc:
+            log.error("owner command failed, all providers down: %s", exc)
+            await message.reply("Every AI provider failed just now — try again shortly.")
+            return
 
     if result.tool_calls:
         for call in result.tool_calls:
