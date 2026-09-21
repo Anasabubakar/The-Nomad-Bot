@@ -30,10 +30,12 @@ DEFAULT_TIMEOUT_SECONDS = 20
 # ever needed instead.
 DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 
-# Groq's catalog churns fast and has no equivalent "-latest" alias; verified
-# working (chat + tool-calling) against the live API as of 2026-09-21.
-# Override with GROQ_MODEL if this one gets retired too.
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+# The 20B tier, not 120B — simple Q&A and picking one of five tools doesn't
+# need a giant model, and the smaller one is cheaper and faster for no loss
+# on this task. Verified working (chat + tool-calling) against the live API
+# as of 2026-09-21. Groq's catalog churns fast with no "-latest" alias;
+# override with GROQ_MODEL if this one gets retired too.
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
