@@ -1,10 +1,14 @@
-"""SQLite storage for engagement metadata.
+"""SQLite storage for engagement metadata and bot memory.
 
-Deliberate constraint: there is no column anywhere in this schema that holds
-message text. Only metadata is recorded (who, when, media flag, reply flag,
-length). That was agreed with the founder alongside disabling privacy mode —
-adding content retention later is a separate decision for them to make, not a
-gap to quietly fill in.
+Deliberate constraint on the `messages` table specifically: no column there
+holds message text, only metadata (who, when, media flag, reply flag,
+length). That was agreed with the founder alongside disabling privacy mode
+for PASSIVE group tracking — the bot silently watching messages go by.
+
+The `conversation_turns` table below is a different thing: it stores the
+actual text of direct conversations someone chose to have WITH the bot (DMing
+it, or @mentioning it), so it can remember them. That is not passive
+surveillance, and the metadata-only constraint was never meant to cover it.
 """
 
 import json
@@ -71,6 +75,37 @@ CREATE TABLE IF NOT EXISTS scheduled_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_active_next_run ON scheduled_jobs (active, next_run_ts);
+
+-- The bot's actual conversation memory — see the module docstring for why
+-- this is a different thing from the metadata-only `messages` table above.
+-- One row per turn, never deleted; nomadbot/memory.py bounds what gets RESENT
+-- to the model per call, not what gets kept.
+CREATE TABLE IF NOT EXISTS conversation_turns (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel  TEXT NOT NULL,
+    chat_id  INTEGER NOT NULL,
+    user_id  INTEGER NOT NULL,
+    role     TEXT NOT NULL,
+    content  TEXT NOT NULL,
+    ts       INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_turns_scope ON conversation_turns (channel, chat_id, user_id, id);
+
+-- A rolling compaction of older turns for one (channel, chat_id, user_id),
+-- so a long-running conversation doesn't mean resending unboundedly more
+-- text (and cost) on every single message. covers_through_id is the id of
+-- the newest conversation_turns row folded into this summary — anything
+-- with a higher id is still sent raw.
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    channel           TEXT NOT NULL,
+    chat_id           INTEGER NOT NULL,
+    user_id           INTEGER NOT NULL,
+    summary           TEXT NOT NULL,
+    covers_through_id INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    PRIMARY KEY (channel, chat_id, user_id)
+);
 """
 
 
@@ -422,6 +457,62 @@ async def cancel_job(job_id: int, created_by: int) -> bool:
     )
     await _conn().commit()
     return cur.rowcount > 0
+
+
+async def append_turn(channel: str, chat_id: int, user_id: int, role: str, content: str) -> int:
+    cur = await _conn().execute(
+        """
+        INSERT INTO conversation_turns (channel, chat_id, user_id, role, content, ts)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (channel, chat_id, user_id, role, content, now()),
+    )
+    await _conn().commit()
+    return cur.lastrowid
+
+
+async def get_conversation_summary(channel: str, chat_id: int, user_id: int) -> Optional[dict]:
+    async with _conn().execute(
+        """
+        SELECT summary, covers_through_id FROM conversation_summaries
+        WHERE channel = ? AND chat_id = ? AND user_id = ?
+        """,
+        (channel, chat_id, user_id),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def set_conversation_summary(
+    channel: str, chat_id: int, user_id: int, summary: str, covers_through_id: int
+) -> None:
+    await _conn().execute(
+        """
+        INSERT INTO conversation_summaries
+            (channel, chat_id, user_id, summary, covers_through_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(channel, chat_id, user_id) DO UPDATE SET
+            summary           = excluded.summary,
+            covers_through_id = excluded.covers_through_id,
+            updated_at        = excluded.updated_at
+        """,
+        (channel, chat_id, user_id, summary, covers_through_id, now()),
+    )
+    await _conn().commit()
+
+
+async def get_turns_after(channel: str, chat_id: int, user_id: int, after_id: int) -> list:
+    """Every turn newer than after_id (0 = everything) — the part of history
+    not yet folded into a summary."""
+    async with _conn().execute(
+        """
+        SELECT id, role, content FROM conversation_turns
+        WHERE channel = ? AND chat_id = ? AND user_id = ? AND id > ?
+        ORDER BY id
+        """,
+        (channel, chat_id, user_id, after_id),
+    ) as cur:
+        return [dict(r) for r in await cur.fetchall()]
 
 
 async def get_owner_id() -> Optional[int]:
