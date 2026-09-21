@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages (chat_id, ts);
 CREATE INDEX IF NOT EXISTS idx_messages_chat_user_ts ON messages (chat_id, user_id, ts);
+
+-- Single-row table. Holds the founder's numeric Telegram user_id once known.
+-- Telegram exposes no numeric ID in its UI, so the id is captured on first
+-- DM contact from OWNER_BOOTSTRAP_USERNAME (see config.py) and pinned from
+-- then on — a username can change later without breaking the gate.
+CREATE TABLE IF NOT EXISTS owner (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    user_id     INTEGER NOT NULL,
+    username    TEXT,
+    resolved_at INTEGER NOT NULL
+);
 """
 
 
@@ -251,3 +262,27 @@ async def user_summary(chat_id: int, user_id: int, days: int) -> dict:
         row["first_seen"] = seen["first_seen"] if seen else None
 
     return row
+
+
+async def get_owner_id() -> Optional[int]:
+    async with _conn().execute("SELECT user_id FROM owner WHERE id = 1") as cur:
+        row = await cur.fetchone()
+        return row["user_id"] if row else None
+
+
+async def set_owner_id(user_id: int, username: Optional[str]) -> None:
+    """Pins the owner's numeric id. Once set, this is what gates admin-only
+    DM commands — the bootstrap username in config.py is only consulted while
+    this is still empty."""
+    await _conn().execute(
+        """
+        INSERT INTO owner (id, user_id, username, resolved_at)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            user_id = excluded.user_id,
+            username = excluded.username,
+            resolved_at = excluded.resolved_at
+        """,
+        (user_id, username, now()),
+    )
+    await _conn().commit()

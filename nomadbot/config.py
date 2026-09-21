@@ -12,6 +12,12 @@ ACTIVE_WINDOW_DAYS = 7
 MYSTATS_WINDOW_DAYS = 30
 LEADERBOARD_SIZE = 10
 
+# One-time bootstrap only. Telegram's UI never shows a numeric user_id, so the
+# founder is identified by username on his first DM to the bot; that DM
+# captures his numeric id into the `owner` table and this value is not
+# consulted again. Set without the leading "@".
+OWNER_BOOTSTRAP_USERNAME = os.environ.get("OWNER_USERNAME", "").strip().lstrip("@")
+
 
 def require_token() -> str:
     if not BOT_TOKEN:
