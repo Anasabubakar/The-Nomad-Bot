@@ -20,6 +20,12 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/nomad-bot
 Environment="BOT_TOKEN=PASTE_YOUR_TOKEN_HERE"
 Environment="DB_PATH=/home/ubuntu/nomad-bot/nomad.db"
+# Optional — enables the AI owner assistant and community Q&A. See
+# .env.example and DEPLOY.md step 5 before setting these.
+# Environment="OWNER_USERNAME=davidnomad"
+# Environment="GEMINI_API_KEY=PASTE_YOUR_KEY_HERE"
+# Environment="GROQ_API_KEY=PASTE_YOUR_KEY_HERE"
+# Environment="TARGET_CHATS_JSON=[{\"key\":\"lounge\",\"chat_id\":-1001234567890,\"label\":\"Nomad Lounge\"}]"
 ExecStart=/home/ubuntu/nomad-bot/venv/bin/python3 /home/ubuntu/nomad-bot/main.py
 Restart=always
 RestartSec=5

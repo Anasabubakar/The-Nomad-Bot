@@ -54,38 +54,103 @@ people tend to check their own numbers.
 Records activity continuously in the background, including joins and leaves, so
 the reports above have something to draw on.
 
+### 5. AI assistant — you, in a DM with the bot
+
+This is new since the bot first went live, and it changes the bot's risk
+profile more than any feature above, so read this section rather than
+skimming it.
+
+You can DM the bot in plain English and it will either answer you directly,
+or — if what you asked for is an action — carry it out on its own:
+
+- Post a message to any group you've configured it to know about.
+- DM a specific member directly (only works for someone the bot has already
+  seen post or join in one of its groups — Telegram forbids a bot from
+  messaging anyone it has no prior record of).
+- Schedule either of the above for later: once, or on a recurring schedule
+  ("every Wednesday at 9am").
+- List or cancel anything it has scheduled.
+
+**There is no confirmation step.** If the model decides your message means
+"post this in Nomad Lounge," it posts it — it doesn't show you a draft first.
+In practice this has been reliable in testing, but it means the AI has your
+authority to speak to the entire community and to DM individuals the moment
+you send a message, not after you approve one.
+
+**Only you can use this.** The bot learns "you" once: the first time you DM it
+after your Telegram handle is set as the bootstrap identity, it permanently
+pins your numeric Telegram account as the owner. From then on, it doesn't
+matter if you change your @username — but it also means **whoever controls
+that Telegram account controls this feature**. If your account were ever
+compromised, that person could direct the bot to message the whole community
+or DM members through it. Treat access to your own Telegram account
+accordingly (2FA, etc.) — that account is now effectively an admin credential
+for the bot.
+
+It remembers your conversation with it (see "What it stores" below), so you
+don't have to re-explain context every message.
+
+### 6. AI Q&A — any member, by @mention or DM
+
+Any member can @mention the bot in a group, reply to one of its messages, or
+DM it directly, and get an answer about the Nomad Network — what the
+ecosystem is, how the Telegram community works, where to find things. It has
+**no access to the actions in section 5** — it cannot post, DM anyone, or
+schedule anything, no matter how the question is phrased, by design.
+
+It only knows what you've directly given it (brand material and the
+Announcements group history) — it does not have a live feed of upcoming
+events, opportunities, or highlights, and is instructed to say so plainly
+rather than invent an event or a date. If members start asking it about
+specific upcoming events and it can't answer, that's this gap, not a bug.
+
 ---
 
 ## Permissions it holds
 
-| Permission | Why it is needed | Risk if abused |
+| Permission / credential | Why it is needed | Risk if abused |
 |---|---|---|
 | **Group admin** | Required to pin announcements and to reliably receive group messages | Limited — it holds *only* Pin Messages. It cannot ban, delete, or invite. |
-| **Privacy mode disabled** | Telegram's default hides group messages from bots. Without this, tracking sees almost nothing. | This is the significant one — see below. |
+| **Privacy mode disabled** | Telegram's default hides group messages from bots. Without this, tracking sees almost nothing. | Significant — see below. |
+| **Your Telegram account, as owner identity** | The AI assistant (section 5) only acts for whoever is pinned as owner | High. Whoever controls that account can direct the bot to message the whole community or any known member, with no confirmation step. |
+| **AI provider API key(s)** (Gemini/Groq/custom) | Powers both AI features | If leaked, someone could run up usage on your account. It grants no access to the bot's data or Telegram itself. |
 
 **What "privacy mode disabled" actually means:** Telegram delivers every message
 in the group to the bot. This is unavoidable for engagement tracking — there is
 no partial version of it. It was agreed to explicitly before the bot was built.
+Separately, note that this is about the bot *seeing* group messages for
+counting purposes — it is not the same thing as the bot *storing* their text,
+which it still does not do for ordinary group chatter (see below).
 
 ---
 
 ## What it stores, and what it deliberately does not
 
-**Stored, per message:** who sent it, when, whether it had media, whether it was
-a reply, and how many characters long it was.
+This now has two different answers depending on whether a member is being
+passively tracked or has chosen to talk to the bot directly. Being precise
+about which one applies where matters if a member ever asks what's collected.
 
-**Not stored:** the message text.
+**Ordinary group activity (passive tracking, always on):** who sent a
+message, when, whether it had media, whether it was a reply, and how many
+characters long it was. **Not stored: the message text itself.** There is no
+field in the database capable of holding it — the column is absent from the
+schema, and an automated test fails if anyone adds one. So the bot knows
+*that* a member posted 14 times this week; it cannot recall *what* they said.
 
-There is no field in the database capable of holding message content. This is
-not a policy that could be forgotten — the column is absent from the schema, and
-an automated test fails if anyone adds one.
+**A DM to the bot, or an @mention/reply addressed to it (sections 5 and 6):**
+the full text, on both sides of the conversation, kept indefinitely so the
+bot can remember context. This is a deliberate, separate decision from the
+passive-tracking guarantee above, made because the AI features cannot work
+without it. That text is also sent to whichever third-party AI provider
+(Gemini, Groq, or another configured service) is answering — it leaves your
+infrastructure. It is not sent anywhere for messages the bot merely observes
+passively in a group.
 
-So the bot knows *that* a member posted 14 times this week. It does not know, and
-cannot recall, *what* they said.
-
-This is a defensible position if a member ever asks what is being collected.
-Recommendation: tell members plainly that activity counts are tracked. It costs
-nothing and removes any "we were not told" problem later.
+**Recommendation:** tell members plainly that (a) activity counts are
+tracked passively, and (b) anything they say *to* the bot directly is stored
+and processed by a third-party AI service — those are two different
+disclosures, and members are likelier to assume the second doesn't apply
+just because they were told about the first.
 
 ---
 
@@ -95,11 +160,16 @@ Stated directly so expectations do not outrun the product.
 
 - **No charts or graphs.** Everything renders as formatted text inside Telegram.
   There is no external dashboard, by design.
-- **No AI.** It counts and sorts. It cannot summarise conversations, gauge
-  sentiment, or answer member questions — and summarising would require storing
-  message text, which would have to be reopened as a decision with the founder.
-- **It only sees forward.** Statistics begin the day it joined the group. It
-  cannot analyse history from before that.
+- **The community AI doesn't know about events yet.** It can talk about the
+  Nomad Network in general, but has no live feed of upcoming events,
+  opportunities, or highlights — it's told to say so rather than invent one,
+  but members asking "what's happening this week" will come away empty.
+- **The AI assistant has no confirmation step.** Once you send it an
+  instruction, it acts — see section 5 for why that matters.
+- **Passive tracking only sees forward.** Statistics begin the day the bot
+  joined the group. It cannot analyse history from before that. (Conversation
+  memory with the AI, separately, starts from whenever each person first
+  talks to it.)
 
 ---
 
@@ -107,12 +177,17 @@ Stated directly so expectations do not outrun the product.
 
 - **Survives reboots and crashes** — runs under `systemd` with automatic restart.
 - **All data lives in one SQLite file** on the VM. It should be backed up
-  periodically; it is the only copy of the engagement history.
+  periodically; it is the only copy of both the engagement history and the AI
+  conversation memory described above.
 - **Two known risks**, neither of which is a code problem: Oracle can reclaim
   idle free-tier instances, and Oracle has reduced free-tier allocations before.
   Both argue for keeping backups off the box.
-- **The only credential the bot holds** is its Telegram token, stored in a
-  root-owned `0600` file on the server. It is not in the repository.
+- **Credentials the bot holds:** its Telegram token, and — if the AI assistant
+  is enabled — one or more AI provider API keys (Gemini/Groq/custom). None of
+  these are in the repository. As currently deployed they sit as plaintext
+  environment variables in the systemd unit on the server (mode `0644` by
+  default); see DEPLOY.md for tightening that to a root-owned, `0600` file if
+  this box ever gets a second user with shell access.
 
 ---
 

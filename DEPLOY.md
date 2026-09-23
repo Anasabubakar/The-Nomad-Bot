@@ -65,15 +65,43 @@ python3 -m venv venv
 
 ```bash
 cd ~/nomad-bot
-PYTHONPATH="$PWD" ./venv/bin/python tests/smoke_test.py
+for f in tests/*.py; do PYTHONPATH="$PWD" ./venv/bin/python "$f"; done
 ```
 
-Expect `ALL CHECKS PASSED`. If it fails here, stop — it will not work live.
+Expect `ALL CHECKS PASSED` (or the file's own all-passed line) from every one.
+If any fails here, stop — it will not work live.
 
-## 5. Manual run against the real group
+## 5. Configure the AI layer (optional but recommended)
+
+Skip this step and the bot still runs `/announce`, `/stats`, and `/mystats`
+normally — it just logs and silently declines whenever the AI owner
+assistant or community Q&A is used. To enable them, set in the environment
+(or the systemd unit's `Environment=` lines in step 6):
+
+- `OWNER_USERNAME` — the founder's Telegram @username, **without** the `@`.
+  His first DM to the bot after this is set permanently binds his numeric id
+  as owner; changing `OWNER_USERNAME` afterward does nothing (see
+  `nomadbot/identity.py`).
+- At least one of `GEMINI_API_KEY`, `GROQ_API_KEY`, or the
+  `CUSTOM_AI_BASE_URL`/`CUSTOM_AI_API_KEY`/`CUSTOM_AI_MODEL` trio.
+- `TARGET_CHATS_JSON` — optional, only needed if the founder wants to tell the
+  AI assistant "post this in <group name>" by name. Get each group's numeric
+  chat id with `/whereami` (admin-only) once the bot is running in it.
+
+Full list and format: `.env.example`.
+
+**Read this before turning it on:** the owner assistant executes tool calls
+(posting to a group, DMing a member, scheduling a future post or DM) with no
+confirmation step, to whoever is bound as owner. Anyone who compromises that
+Telegram account can direct the bot to message the whole community or DM
+individual members through it. This is documented for the founder in
+[BRIEF.md](BRIEF.md) — read that section before enabling.
+
+## 6. Manual run against the real group
 
 ```bash
 export BOT_TOKEN="your-real-token"
+export OWNER_USERNAME="davidnomad"   # only if enabling the AI owner assistant
 ./venv/bin/python main.py
 ```
 
@@ -89,11 +117,11 @@ check `build_dispatcher()` in `main.py` has `tracking.router` last.
 
 `Ctrl+C` to stop once all three are confirmed.
 
-## 6. Run it for good
+## 7. Run it for good
 
 ```bash
 sudo cp deploy/nomad-bot.service /etc/systemd/system/
-sudo nano /etc/systemd/system/nomad-bot.service    # paste the real token, check paths
+sudo nano /etc/systemd/system/nomad-bot.service    # paste the real token (and OWNER_USERNAME / AI keys if using step 5), check paths
 sudo systemctl daemon-reload
 sudo systemctl enable --now nomad-bot
 sudo systemctl status nomad-bot
@@ -101,7 +129,7 @@ sudo systemctl status nomad-bot
 
 Want `active (running)`.
 
-## 7. Confirm it survives disconnection
+## 8. Confirm it survives disconnection
 
 ```bash
 exit          # close SSH entirely
@@ -134,6 +162,7 @@ vanishes one day, that is the likely cause, not a code bug. Oracle has also cut
 the Always Free Ampere allocation before — treat this host as a dependency that
 can change under you, and keep the database backed up off the box.
 
-**The bot token sits in plaintext** in the systemd unit (mode 0644 by default).
-Acceptable for a single-maintainer VM. If this box ever gets a second user,
-move the token to a root-owned `EnvironmentFile` with `chmod 600` instead.
+**The bot token — and, if step 5 was done, every AI provider key — sits in
+plaintext** in the systemd unit (mode 0644 by default). Acceptable for a
+single-maintainer VM. If this box ever gets a second user, move them to a
+root-owned `EnvironmentFile` with `chmod 600` instead.
