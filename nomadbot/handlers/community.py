@@ -19,6 +19,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
 from .. import memory
+from ..ai.knowledge import KNOWLEDGE
 from ..ai.persona import PERSONA
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
 from ..util import GROUP_TYPES, show_typing
@@ -54,7 +55,7 @@ FUNCTIONAL_RULES = (
     "things, say so plainly rather than pretending to have done it."
 )
 
-SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + FUNCTIONAL_RULES
+SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + KNOWLEDGE + "\n\n---\n\n" + FUNCTIONAL_RULES
 
 _ai_router: AIRouter = None
 _bot_username: str = None
