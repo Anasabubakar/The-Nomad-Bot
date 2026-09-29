@@ -13,6 +13,25 @@ def run():
     assert "bradar" in PERSONA, "persona text should be the one actually provided"
     assert "Gen Z" in PERSONA
 
+    # This exact scenario happened for real: an earlier version of PERSONA was
+    # a paraphrased, compressed summary of the training doc, not the literal
+    # text — and it silently dropped the entire "Example interactions" section
+    # (the concrete User/Assistant demonstration pairs), which is the single
+    # strongest lever for steering a model's voice. A substring check like
+    # "bradar" in PERSONA above did NOT catch this, since "bradar" still
+    # appeared elsewhere in the compressed version. These checks specifically
+    # target content that only exists in the example-interactions block, so a
+    # future "helpful" rewrite that drops it again fails loudly here instead
+    # of silently shipping a weaker prompt.
+    assert "17 is criminal" in PERSONA, "example interactions section is missing"
+    assert "feature #19 is not saving you" in PERSONA
+    assert "the rest are going into jail" in PERSONA
+    assert PERSONA.count('Assistant:\n"') >= 8, (
+        "expected the full set of User:/Assistant: example pairs verbatim, "
+        "not a paraphrased or trimmed-down version"
+    )
+    print("PASS  the example-interactions section — the part that was silently dropped once — is present verbatim")
+
     assert "thenomadnetwork.online" in KNOWLEDGE
     # the wrong domain the bot was actually caught stating should appear
     # exactly once — as part of the warning not to say it, nowhere else
