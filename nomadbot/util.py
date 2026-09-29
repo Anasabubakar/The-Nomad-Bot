@@ -27,21 +27,28 @@ async def show_typing(bot: Bot, chat_id: int, thread_id: Optional[int] = None):
     re-sent every few seconds since Telegram's indicator times out on its
     own. Use around anything slow enough that a member would otherwise stare
     at a silent chat — an AI call, mainly.
+
+    The first send is awaited directly, not fired into a background task —
+    a fast provider (sub-second) can otherwise finish and send the real
+    reply before Telegram has even received, let alone rendered, the typing
+    signal, so the indicator never visibly appears at all. Awaiting it here
+    guarantees Telegram has the signal before the slow work even starts.
     """
+
+    async def _send_once():
+        try:
+            await bot.send_chat_action(chat_id, "typing", message_thread_id=thread_id)
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            log.debug("typing indicator failed for %s: %s", chat_id, exc)
+
+    await _send_once()
 
     async def _keep_alive():
         while True:
-            try:
-                await bot.send_chat_action(chat_id, "typing", message_thread_id=thread_id)
-            except (TelegramBadRequest, TelegramForbiddenError) as exc:
-                log.debug("typing indicator failed for %s: %s", chat_id, exc)
             await asyncio.sleep(TYPING_REFRESH_SECONDS)
+            await _send_once()
 
     task = asyncio.create_task(_keep_alive())
-    await asyncio.sleep(0)  # let the first typing call actually fire before
-    # the wrapped block runs — asyncio.create_task only schedules it, a
-    # block with no awaits of its own would otherwise get cancelled before
-    # the task ever got a turn to run.
     try:
         yield
     finally:
