@@ -23,6 +23,15 @@ def run():
     assert warning_pos < KNOWLEDGE.index("nomad.network"), "the warning must precede the wrong domain, not follow it"
     print("PASS  knowledge block states the correct website and explicitly warns against the wrong one")
 
+    # the general membership application form — found missing on a source-doc
+    # re-check; distinct from the Nomad Labs (talent arm) application link
+    assert "tally.so/r/EkebVr" in KNOWLEDGE
+    assert "bit.ly/JoinNomadLabs" in KNOWLEDGE
+    assert KNOWLEDGE.index("tally.so") != KNOWLEDGE.index("bit.ly/JoinNomadLabs"), (
+        "the two application links must be distinguishable, not conflated"
+    )
+    print("PASS  both application links present and kept distinct (general vs Nomad Labs)")
+
     # owner channel: all three layers present
     for layer, marker in ((PERSONA, "PERSONA"), (KNOWLEDGE, "KNOWLEDGE")):
         assert layer in owner.SYSTEM_PROMPT, f"owner.SYSTEM_PROMPT is missing {marker}"
