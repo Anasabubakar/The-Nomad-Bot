@@ -80,8 +80,8 @@ async def run():
             "AI_PROVIDERS_JSON": '[{"name": "backup", "base_url": "http://b", "api_key": "k", "model": "m"}]',
         }
     )
-    assert [p.name for p in chain] == ["gemini", "groq", "custom", "backup"], chain
-    print("PASS  provider chain order: gemini -> groq -> custom -> backup")
+    assert [p.name for p in chain] == ["groq", "gemini", "custom", "backup"], chain
+    print("PASS  provider chain order: groq -> gemini -> custom -> backup")
 
     # partial CUSTOM_AI_* must not produce a broken provider
     chain2 = build_provider_chain({"CUSTOM_AI_BASE_URL": "http://custom"})
