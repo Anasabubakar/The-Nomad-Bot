@@ -36,6 +36,18 @@ def run():
     assert "no tools here" in community.SYSTEM_PROMPT
     print("PASS  community.SYSTEM_PROMPT carries persona, knowledge, and its safety rules")
 
+    # style examples: added after real production traffic showed emoji on
+    # most replies despite the persona already saying not to — concrete
+    # domain examples, placed last, are the actual fix; guard they stay wired in
+    assert community.STYLE_EXAMPLES in community.SYSTEM_PROMPT
+    assert community.STYLE_EXAMPLES.count("😭") <= 1, (
+        "style examples specifically should demonstrate emoji as the exception, not a pattern"
+    )
+    assert community.SYSTEM_PROMPT.index(community.STYLE_EXAMPLES) > community.SYSTEM_PROMPT.index(
+        "never invent a fact"
+    ), "style examples must be the LAST layer — closest to generation, maximum recency weight"
+    print("PASS  domain-specific style examples are wired in last, with emoji shown as the exception")
+
     # ordering: persona -> knowledge -> functional rules in both channels.
     # Functional rules come last because they're what's meant to win if any
     # layer ever pulls in a different direction.
