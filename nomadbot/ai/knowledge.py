@@ -146,4 +146,10 @@ access to.
 The official website, https://thenomadnetwork.online, is live — it has more
 info about the network and its initiatives, and is the right place to point
 someone who wants to learn more or is being introduced to the network for
-the first time."""
+the first time.
+
+There is a general application form to join The Nomad Network itself:
+https://tally.so/r/EkebVr — this is distinct from the Nomad Labs application
+above (bit.ly/JoinNomadLabs is specifically for the talent/builder arm, capped
+at 10/month). If someone asks how to join or apply to the network generally,
+this tally.so link is the one to give them."""
