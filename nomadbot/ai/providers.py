@@ -5,10 +5,17 @@ Gemini and Groq both expose an OpenAI-compatible chat-completions endpoint, and
 client class covers all three, and the fallback chain is just an ordered list
 — adding a fourth or fifth provider is a config change, not a code change.
 
-Order is: Gemini, then Groq, then custom, then anything appended via
+Order is: Groq, then Gemini, then custom, then anything appended via
 AI_PROVIDERS_JSON. Each provider is tried in turn; the first one that returns a
 usable reply wins. A provider being down, rate-limited, or timing out must
 never surface as an error to a group member — it should just fall through.
+
+Groq goes first, not Gemini, despite the "G" order looking backwards — this was
+flipped in production after watching Gemini fail (503 "high demand" / outright
+timeouts) on every real request in a session, while Groq answered in under a
+second every time. Every failed-then-fallback costs up to DEFAULT_TIMEOUT_SECONDS
+before the next provider even gets tried, so putting the flaky one first was
+directly costing users response time. Revisit if Gemini's reliability improves.
 """
 
 import json
@@ -21,7 +28,11 @@ from openai import AsyncOpenAI
 
 log = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_SECONDS = 20
+# Bounds the worst case per provider before falling through to the next one.
+# Was 20s; tightened after Gemini's real-world failures (503s, timeouts) meant
+# every bad Gemini call cost up to 20s before Groq — which is reliably
+# sub-second — ever got a turn.
+DEFAULT_TIMEOUT_SECONDS = 10
 
 # "gemini-flash-latest" is an alias Google maintains to always point at their
 # current flash-tier model, chosen deliberately over a pinned version number
@@ -80,17 +91,7 @@ def build_provider_chain(env: Optional[dict] = None) -> list:
     env = env if env is not None else os.environ
     providers = []
 
-    gemini_key = env.get("GEMINI_API_KEY", "").strip()
-    if gemini_key:
-        providers.append(
-            Provider(
-                name="gemini",
-                base_url=GEMINI_BASE_URL,
-                api_key=gemini_key,
-                model=env.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip(),
-            )
-        )
-
+    # Groq first — see the module docstring for why this isn't alphabetical.
     groq_key = env.get("GROQ_API_KEY", "").strip()
     if groq_key:
         providers.append(
@@ -99,6 +100,17 @@ def build_provider_chain(env: Optional[dict] = None) -> list:
                 base_url=GROQ_BASE_URL,
                 api_key=groq_key,
                 model=env.get("GROQ_MODEL", DEFAULT_GROQ_MODEL).strip(),
+            )
+        )
+
+    gemini_key = env.get("GEMINI_API_KEY", "").strip()
+    if gemini_key:
+        providers.append(
+            Provider(
+                name="gemini",
+                base_url=GEMINI_BASE_URL,
+                api_key=gemini_key,
+                model=env.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip(),
             )
         )
 
