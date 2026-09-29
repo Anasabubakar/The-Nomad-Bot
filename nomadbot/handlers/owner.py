@@ -22,7 +22,7 @@ from aiogram.types import Message
 
 from .. import actions, db, identity, memory, scheduler
 from ..ai.knowledge import KNOWLEDGE
-from ..ai.persona import PERSONA
+from ..ai.persona import PERSONA, PERSONA_REMINDER
 from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
 from ..ai.tools import SYSTEM_PROMPT as FUNCTIONAL_RULES
 from ..ai.tools import TOOLS
@@ -30,16 +30,26 @@ from ..util import show_typing
 
 log = logging.getLogger(__name__)
 
-# Three distinct layers: PERSONA (tone), KNOWLEDGE (real facts, sourced from
+# Four layers in order: PERSONA (tone), KNOWLEDGE (real facts, sourced from
 # the founder), FUNCTIONAL_RULES (what the model is allowed to do — the tool
-# list, one-call-per-message). Order matters if any two ever pull apart:
-# voice can flex, facts don't change, and FUNCTIONAL_RULES wins last.
-SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + KNOWLEDGE + "\n\n---\n\n" + FUNCTIONAL_RULES
+# list, one-call-per-message), PERSONA_REMINDER (closing nudge — models weight
+# the end of a prompt more heavily, and a long formal rules block right before
+# the reply was quietly winning out over the voice instructions at the top).
+SYSTEM_PROMPT = (
+    PERSONA + "\n\n---\n\n" + KNOWLEDGE + "\n\n---\n\n" + FUNCTIONAL_RULES
+    + "\n\n---\n\n" + PERSONA_REMINDER
+)
 
 router = Router(name="owner")
 router.message.filter(F.chat.type == "private")
 
 MEMORY_CHANNEL = "owner"
+
+# Lower than community.py's — this channel does real tool-calling, and
+# structured tool selection gets less reliable at high temperature. Still
+# above the router's 0.4 default, enough to let personality through on the
+# plain-text (non-tool-call) replies without risking wrong tool picks.
+REPLY_TEMPERATURE = 0.6
 
 _ai_router: AIRouter = None
 
@@ -133,7 +143,7 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
 
     async with show_typing(bot, message.chat.id):
         try:
-            result = await ai_router.complete(conversation, tools=TOOLS)
+            result = await ai_router.complete(conversation, tools=TOOLS, temperature=REPLY_TEMPERATURE)
         except AllProvidersFailedError as exc:
             log.error("owner command failed, all providers down: %s", exc)
             await message.reply("Every AI provider failed just now — try again shortly.")

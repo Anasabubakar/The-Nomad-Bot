@@ -20,7 +20,7 @@ from aiogram.types import Message
 
 from .. import memory
 from ..ai.knowledge import KNOWLEDGE
-from ..ai.persona import PERSONA
+from ..ai.persona import PERSONA, PERSONA_REMINDER
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
 from ..util import GROUP_TYPES, show_typing
 from . import tracking
@@ -31,6 +31,13 @@ router = Router(name="community")
 
 MEMORY_CHANNEL = "community"
 MAX_REPLY_TOKENS = 500
+
+# Higher than the router's 0.4 default — a low temperature plus a long,
+# rule-heavy prompt was pushing replies toward the safest, most generic
+# phrasing available, which is the opposite of the personality this is
+# supposed to have. No tool-calling happens on this channel, so there's no
+# structured-output precision to protect by staying conservative.
+REPLY_TEMPERATURE = 0.85
 
 # Functional rules — what the model must never do, regardless of voice. These
 # come after PERSONA in the composed prompt on purpose: the personality can
@@ -55,7 +62,10 @@ FUNCTIONAL_RULES = (
     "things, say so plainly rather than pretending to have done it."
 )
 
-SYSTEM_PROMPT = PERSONA + "\n\n---\n\n" + KNOWLEDGE + "\n\n---\n\n" + FUNCTIONAL_RULES
+SYSTEM_PROMPT = (
+    PERSONA + "\n\n---\n\n" + KNOWLEDGE + "\n\n---\n\n" + FUNCTIONAL_RULES
+    + "\n\n---\n\n" + PERSONA_REMINDER
+)
 
 _ai_router: AIRouter = None
 _bot_username: str = None
@@ -112,7 +122,9 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
 
     async with show_typing(bot, message.chat.id, message.message_thread_id):
         try:
-            result = await ai_router.complete(conversation, max_tokens=MAX_REPLY_TOKENS)
+            result = await ai_router.complete(
+                conversation, max_tokens=MAX_REPLY_TOKENS, temperature=REPLY_TEMPERATURE
+            )
         except AllProvidersFailedError as exc:
             log.error("community Q&A failed, all providers down: %s", exc)
             await message.reply("Couldn't get an answer just now — try again shortly.")
