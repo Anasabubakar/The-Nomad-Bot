@@ -21,6 +21,8 @@ directly costing users response time. Revisit if Gemini's reliability improves.
 import json
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -33,6 +35,10 @@ log = logging.getLogger(__name__)
 # every bad Gemini call cost up to 20s before Groq — which is reliably
 # sub-second — ever got a turn.
 DEFAULT_TIMEOUT_SECONDS = 10
+
+# How long a provider that returned 429 / 5xx is deprioritised.
+QUOTA_COOLDOWN_SECONDS = 120
+CAPACITY_COOLDOWN_SECONDS = 30
 
 # "gemini-flash-latest" is an alias Google maintains to always point at their
 # current flash-tier model, chosen deliberately over a pinned version number
@@ -114,13 +120,20 @@ def build_provider_chain(env: Optional[dict] = None) -> list:
             )
         )
 
-    gemini_key = env.get("GEMINI_API_KEY", "").strip()
-    if gemini_key:
+    # GEMINI_API_KEY plus any number of extras in GEMINI_API_KEYS (comma or
+    # whitespace separated). Each key is its own provider so a quota-exhausted
+    # key falls through to the next one; free-tier quota is per key/project.
+    gemini_keys = []
+    for raw in [env.get("GEMINI_API_KEY", "")] + re.split(r"[,\s]+", env.get("GEMINI_API_KEYS", "")):
+        raw = raw.strip()
+        if raw and raw not in gemini_keys:
+            gemini_keys.append(raw)
+    for i, key in enumerate(gemini_keys, start=1):
         providers.append(
             Provider(
-                name="gemini",
+                name="gemini" if i == 1 else f"gemini-{i}",
                 base_url=GEMINI_BASE_URL,
-                api_key=gemini_key,
+                api_key=key,
                 model=env.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip(),
             )
         )
@@ -163,6 +176,7 @@ class AIRouter:
 
     def __init__(self, providers: list):
         self._providers = providers
+        self._cooldown_until = {}
         self._clients = {
             p.name: AsyncOpenAI(api_key=p.api_key, base_url=p.base_url, timeout=p.timeout)
             for p in providers
@@ -188,8 +202,15 @@ class AIRouter:
 
         extra = {"tools": tools} if tools else {}
 
+        # Providers that just failed on quota/capacity go to the back of the
+        # line for a while instead of costing a round trip on every request;
+        # if everything is cooling down they are still tried as a last resort.
+        now = time.monotonic()
+        ready = [p for p in self._providers if self._cooldown_until.get(p.name, 0) <= now]
+        cooling = [p for p in self._providers if p not in ready]
+
         failures = []
-        for provider in self._providers:
+        for provider in ready + cooling:
             client = self._clients[provider.name]
             try:
                 response = await client.chat.completions.create(
@@ -204,6 +225,11 @@ class AIRouter:
                 # drop, bad JSON, whatever) take the whole request down.
                 log.warning("provider %s failed: %s: %s", provider.name, type(exc).__name__, exc)
                 failures.append(f"{provider.name}: {exc}")
+                status = getattr(exc, "status_code", None)
+                if status == 429:
+                    self._cooldown_until[provider.name] = time.monotonic() + QUOTA_COOLDOWN_SECONDS
+                elif status in (500, 502, 503, 504):
+                    self._cooldown_until[provider.name] = time.monotonic() + CAPACITY_COOLDOWN_SECONDS
                 continue
 
             choice_message = response.choices[0].message

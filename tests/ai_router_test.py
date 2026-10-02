@@ -152,5 +152,34 @@ async def run():
     print("PASS  tools kwarg is omitted entirely when not requested")
 
 
+    # --- multiple Gemini keys rotate in order, one provider per key -------
+    chain = build_provider_chain({"GEMINI_API_KEY": "k1", "GEMINI_API_KEYS": "k2, k3\nk1 k4"})
+    assert [p.name for p in chain] == ["gemini", "gemini-2", "gemini-3", "gemini-4"], chain
+    assert [p.api_key for p in chain] == ["k1", "k2", "k3", "k4"]
+    print("PASS  GEMINI_API_KEYS adds deduplicated extra Gemini providers in order")
+
+    router = make_router({"gemini": "error", "gemini-2": "error", "gemini-3": "ok"})
+    result = await router.complete([{"role": "user", "content": "hi"}])
+    assert result.provider == "gemini-3", result
+    print("PASS  a failing Gemini key falls through to the next key")
+
+    # --- quota cooldown: a 429'd provider is deprioritised next time ------
+    class QuotaError(Exception):
+        status_code = 429
+    router = make_router({"a": "ok", "b": "ok"})
+    async def boom(**kw):
+        raise QuotaError("quota")
+    router._clients["a"].chat.completions.create = boom
+    r1 = await router.complete([{"role": "user", "content": "hi"}])
+    assert r1.provider == "b"
+    assert router._cooldown_until["a"] > 0
+    order_calls = []
+    async def spy(**kw):
+        order_calls.append("a"); raise QuotaError("quota")
+    router._clients["a"].chat.completions.create = spy
+    r2 = await router.complete([{"role": "user", "content": "hi"}])
+    assert r2.provider == "b" and order_calls == [], "cooling provider must not be tried first"
+    print("PASS  a provider that returned 429 is skipped while cooling down")
+
 asyncio.run(run())
 print("\nALL AI ROUTER CHECKS PASSED")
