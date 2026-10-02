@@ -22,7 +22,7 @@ from aiogram.types import Message
 
 from .. import actions, db, identity, memory, scheduler
 from ..ai.knowledge import KNOWLEDGE
-from ..ai.persona import PERSONA, PERSONA_REMINDER
+from ..ai.persona import PERSONA, PERSONA_REMINDER, apply_voice, sanitize_reply
 from ..ai.providers import AIRouter, AllProvidersFailedError, ToolCall, build_provider_chain
 from ..ai.tools import SYSTEM_PROMPT as FUNCTIONAL_RULES
 from ..ai.tools import TOOLS
@@ -139,7 +139,7 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
 
     await memory.remember(MEMORY_CHANNEL, message.chat.id, user_id, "user", message.text or "")
     history = await memory.build_prompt_messages(MEMORY_CHANNEL, message.chat.id, user_id, ai_router)
-    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+    conversation = apply_voice([{"role": "system", "content": SYSTEM_PROMPT}] + history, note=False)
 
     async with show_typing(bot, message.chat.id):
         try:
@@ -158,5 +158,6 @@ async def on_owner_dm(message: Message, bot: Bot) -> None:
             f"[called {result.tool_calls[0].name}]",
         )
     else:
-        await message.reply(result.text)
-        await memory.remember(MEMORY_CHANNEL, message.chat.id, user_id, "assistant", result.text)
+        reply = sanitize_reply(result.text) or result.text
+        await message.reply(reply)
+        await memory.remember(MEMORY_CHANNEL, message.chat.id, user_id, "assistant", reply)

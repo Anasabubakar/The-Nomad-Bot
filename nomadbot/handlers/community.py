@@ -20,7 +20,7 @@ from aiogram.types import Message
 
 from .. import memory
 from ..ai.knowledge import KNOWLEDGE
-from ..ai.persona import PERSONA, PERSONA_REMINDER
+from ..ai.persona import PERSONA, PERSONA_REMINDER, apply_voice, sanitize_reply
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
 from ..util import GROUP_TYPES, show_typing
 from . import tracking
@@ -146,7 +146,7 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
     chat_id, user_id = key
     await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "user", question)
     history = await memory.build_prompt_messages(MEMORY_CHANNEL, chat_id, user_id, ai_router)
-    conversation = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+    conversation = apply_voice([{"role": "system", "content": SYSTEM_PROMPT}] + history)
 
     async with show_typing(bot, message.chat.id, message.message_thread_id):
         try:
@@ -158,8 +158,9 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
             await message.reply("Couldn't get an answer just now — try again shortly.")
             return
 
-    await message.reply(result.text)
-    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "assistant", result.text)
+    reply = sanitize_reply(result.text) or result.text
+    await message.reply(reply)
+    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "assistant", reply)
 
 
 @router.message(F.chat.type.in_(GROUP_TYPES))
