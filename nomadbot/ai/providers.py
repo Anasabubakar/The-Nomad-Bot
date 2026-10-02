@@ -45,7 +45,7 @@ CAPACITY_COOLDOWN_SECONDS = 30
 # (gemini-2.0-flash, the original default here, was retired and returned a
 # 404 in production). Override with GEMINI_MODEL if a specific version is
 # ever needed instead.
-DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 
 # The 20B tier, not 120B — simple Q&A and picking one of five tools doesn't
 # need a giant model, and the smaller one is cheaper and faster for no loss
