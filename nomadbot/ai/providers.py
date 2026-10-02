@@ -47,6 +47,9 @@ DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 # as of 2026-09-21. Groq's catalog churns fast with no "-latest" alias;
 # override with GROQ_MODEL if this one gets retired too.
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+# Free-tier Groq limits tokens/minute per MODEL, and each request here is ~5k
+# tokens, so a second model doubles the burst capacity before Gemini is needed.
+DEFAULT_GROQ_FALLBACK_MODEL = "openai/gpt-oss-120b"
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
@@ -100,6 +103,14 @@ def build_provider_chain(env: Optional[dict] = None) -> list:
                 base_url=GROQ_BASE_URL,
                 api_key=groq_key,
                 model=env.get("GROQ_MODEL", DEFAULT_GROQ_MODEL).strip(),
+            )
+        )
+        providers.append(
+            Provider(
+                name="groq-large",
+                base_url=GROQ_BASE_URL,
+                api_key=groq_key,
+                model=env.get("GROQ_FALLBACK_MODEL", DEFAULT_GROQ_FALLBACK_MODEL).strip(),
             )
         )
 
