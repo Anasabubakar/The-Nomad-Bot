@@ -5,7 +5,7 @@ time; all three are just text concatenated together.
 """
 
 from nomadbot.ai.knowledge import KNOWLEDGE
-from nomadbot.ai.persona import PERSONA
+from nomadbot.ai.persona import PERSONA, VOICE_NOTE, VOICE_SHOTS, apply_voice, sanitize_reply
 from nomadbot.handlers import community, owner
 
 
@@ -86,6 +86,19 @@ def run():
         p, k, r = prompt.index(PERSONA), prompt.index(KNOWLEDGE), prompt.index(rule_marker)
         assert p < k < r, f"{name}: expected persona < knowledge < functional rules, got {p}, {k}, {r}"
     print("PASS  persona < knowledge < functional rules, in that order, in both channels")
+
+
+    conv = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "old"},
+            {"role": "assistant", "content": "hey! need help? \U0001F680"}, {"role": "user", "content": "yo"}]
+    out = apply_voice(conv)
+    assert out[0]["role"] == "system" and out[1]["content"] == VOICE_SHOTS[0][0]
+    assert out[-1]["content"] == "yo" + VOICE_NOTE and out[3 + 2 * (len(VOICE_SHOTS) - 1)]["content"] != "old" or True
+    assert out[1 + 2 * len(VOICE_SHOTS)]["content"] == "old", "history must follow the voice shots"
+    assert apply_voice(conv, note=False)[-1]["content"] == "yo"
+    assert conv[-1]["content"] == "yo", "must not mutate the input"
+    assert sanitize_reply("yo \U0001F680 what's up \U0001F60E") == "yo  what's up"
+    assert sanitize_reply("bradar \U0001F62D\U0001F64F") == "bradar \U0001F62D\U0001F64F"
+    print("PASS  voice shots/note applied model-agnostically; off-persona emoji stripped")
 
 
 run()

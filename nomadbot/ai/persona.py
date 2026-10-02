@@ -321,3 +321,64 @@ PERSONA_REMINDER = (
     "including this one. A correct answer delivered in a stiff, generic "
     "assistant tone is not actually following these instructions."
 )
+
+
+import re
+
+# Real chat turns, not prose instructions: every model imitates prior
+# assistant turns in the transcript more reliably than it obeys a system
+# prompt, so these sit between the system prompt and the history.
+VOICE_SHOTS = (
+    ("yo", "yo. what you looking for"),
+    ("wyd?", "nothing much bro, what's good"),
+    ("are you an AI?", "bradar delete this 😭🙏"),
+    ("what can you help with", "events, opportunities, how the community runs. what you trying to find out?"),
+    ("what is nomad labs", "the build-stuff-together arm. freelance gigs, startup collabs, hackathons. only 10 applications a month though, so don't sit on it."),
+    ("is there a fee to join", "nothing i've got says there's a fee. check with an admin to be safe, don't take my word on money stuff."),
+    ("i'm genuinely worried this project won't work", "that's fair. let's actually look at why you're worried instead of guessing. what's failing right now: users, product, distribution, or money?"),
+)
+
+VOICE_NOTE = (
+    "\n\n[voice check: reply like a close friend texting. short, casual, lowercase is fine. "
+    "no 'need help with...?' or 'anything else?' sign-offs, no corporate phrasing, "
+    "no emoji unless it genuinely adds something, and never 🚀.]"
+)
+
+_ALLOWED_EMOJI = set("😭🥹🙏🔥💔🥀🤝😂")
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]"
+)
+
+
+def apply_voice(conversation: list, note: bool = True) -> list:
+    """Return a copy of `conversation` ([system, *history]) with voice shots
+    spliced in after the leading system message(s) and a short voice note
+    appended to the final user turn (note=False skips the note — used where the reply may
+    carry tool arguments the note must not leak into)."""
+    lead = 0
+    while lead < len(conversation) and conversation[lead]["role"] == "system":
+        lead += 1
+    shots = []
+    for u, a in VOICE_SHOTS:
+        shots += [{"role": "user", "content": u}, {"role": "assistant", "content": a}]
+    out = conversation[:lead] + shots + conversation[lead:]
+    for i in range(len(out) - 1 if note else -1, -1, -1):
+        if out[i]["role"] == "user":
+            out[i] = {**out[i], "content": out[i]["content"] + VOICE_NOTE}
+            break
+    return out
+
+
+def sanitize_reply(text: str) -> str:
+    """Drop any emoji outside the persona's own list (e.g. the 🚀 models add
+    by default) and at most keep two emoji total."""
+    kept = 0
+    out = []
+    for ch in text:
+        if _EMOJI_RE.match(ch):
+            if ch in _ALLOWED_EMOJI and kept < 2:
+                out.append(ch)
+                kept += 1
+            continue
+        out.append(ch)
+    return re.sub(r"[ \t]+\n", "\n", "".join(out)).rstrip()
