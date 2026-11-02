@@ -186,6 +186,70 @@ class AIRouter:
     def configured(self) -> bool:
         return bool(self._providers)
 
+    def _ordered(self) -> list:
+        """Providers that just failed on quota/capacity go to the back of the
+        line for a while instead of costing a round trip on every request;
+        if everything is cooling down they are still tried as a last resort."""
+        now = time.monotonic()
+        ready = [p for p in self._providers if self._cooldown_until.get(p.name, 0) <= now]
+        cooling = [p for p in self._providers if p not in ready]
+        return ready + cooling
+
+    def _note_failure(self, provider: Provider, exc: Exception) -> None:
+        status = getattr(exc, "status_code", None)
+        if status == 429:
+            self._cooldown_until[provider.name] = time.monotonic() + QUOTA_COOLDOWN_SECONDS
+        elif status in (500, 502, 503, 504):
+            self._cooldown_until[provider.name] = time.monotonic() + CAPACITY_COOLDOWN_SECONDS
+
+    async def stream(
+        self,
+        messages: list,
+        *,
+        temperature: float = 0.4,
+        max_tokens: int = 800,
+    ):
+        """Async generator yielding the reply accumulated so far each time new
+        text arrives. Falls through to the next provider only while nothing
+        has been received yet — once text is flowing, a mid-stream failure
+        just ends the stream with what already arrived. Text-only: no tools."""
+        if not self._providers:
+            raise AllProvidersFailedError("no AI provider is configured")
+
+        failures = []
+        for provider in self._ordered():
+            client = self._clients[provider.name]
+            text = ""
+            try:
+                response = await client.chat.completions.create(
+                    model=provider.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=True,
+                )
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta.content or ""
+                    if delta:
+                        text += delta
+                        yield text
+            except Exception as exc:  # noqa: BLE001 - same fallback boundary as complete()
+                log.warning("provider %s stream failed: %s: %s", provider.name, type(exc).__name__, exc)
+                failures.append(f"{provider.name}: {exc}")
+                self._note_failure(provider, exc)
+                if text:
+                    return
+                continue
+            if text.strip():
+                return
+            failures.append(f"{provider.name}: empty reply")
+
+        raise AllProvidersFailedError(
+            f"all {len(self._providers)} provider(s) failed: " + "; ".join(failures)
+        )
+
     async def complete(
         self,
         messages: list,
@@ -202,15 +266,8 @@ class AIRouter:
 
         extra = {"tools": tools} if tools else {}
 
-        # Providers that just failed on quota/capacity go to the back of the
-        # line for a while instead of costing a round trip on every request;
-        # if everything is cooling down they are still tried as a last resort.
-        now = time.monotonic()
-        ready = [p for p in self._providers if self._cooldown_until.get(p.name, 0) <= now]
-        cooling = [p for p in self._providers if p not in ready]
-
         failures = []
-        for provider in ready + cooling:
+        for provider in self._ordered():
             client = self._clients[provider.name]
             try:
                 response = await client.chat.completions.create(
@@ -225,11 +282,7 @@ class AIRouter:
                 # drop, bad JSON, whatever) take the whole request down.
                 log.warning("provider %s failed: %s: %s", provider.name, type(exc).__name__, exc)
                 failures.append(f"{provider.name}: {exc}")
-                status = getattr(exc, "status_code", None)
-                if status == 429:
-                    self._cooldown_until[provider.name] = time.monotonic() + QUOTA_COOLDOWN_SECONDS
-                elif status in (500, 502, 503, 504):
-                    self._cooldown_until[provider.name] = time.monotonic() + CAPACITY_COOLDOWN_SECONDS
+                self._note_failure(provider, exc)
                 continue
 
             choice_message = response.choices[0].message
