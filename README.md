@@ -50,6 +50,17 @@ this deployment.
 Telegram only delivers messages that mention or reply to the bot, and every
 metric under-counts. `/stats` says so explicitly when it sees zero activity.
 
+## Newer Telegram modes (Bot API 9.3 - 10.3, aiogram 3.31)
+
+Each needs its switch turned on in BotFather (Bot Settings) as well as the code:
+
+- **Guest Chat** (`handlers/guest.py`): mention the bot in a chat it is not in; it answers through `answerGuestQuery`. Read-only, same rules as community Q&A.
+- **Inline mode** (`handlers/inline.py`): `@the_nomadbot` offers tappable link cards. Static on purpose, no AI call per keystroke.
+- **Secretary mode** (`handlers/business.py`): founder only. The founder connects the bot under Telegram Settings > Business > Chatbots. Only his connection is honored; the bot keeps a directory of chat names (never message text) so he can say "message Jenny: ..." in his DM channel and have it sent from his own account (`send_as_owner`). It never replies on its own.
+- **DM draft streaming**: set `STREAM_DM_REPLIES=1` to stream DM replies live (`sendMessageDraft`). Off by default because BotFather describes streamed threaded replies as possibly carrying a Telegram Stars fee.
+
+"Restrict bot usage" in BotFather must be OFF, or only the owner can use the bot at all.
+
 ## Local run
 
 ```bash

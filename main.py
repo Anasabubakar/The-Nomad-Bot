@@ -13,7 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 
 from nomadbot import config, db, scheduler
-from nomadbot.handlers import announce, community, diagnostics, owner, stats, tracking
+from nomadbot.handlers import announce, business, community, diagnostics, guest, inline, owner, stats, tracking
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +48,12 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(owner.router)
     dp.include_router(community.router)
     dp.include_router(tracking.router)
+
+    # Own update types (inline_query, guest_message, business_*): no ordering
+    # interaction with the message routers above.
+    dp.include_router(inline.router)
+    dp.include_router(guest.router)
+    dp.include_router(business.router)
 
     return dp
 
