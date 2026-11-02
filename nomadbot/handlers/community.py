@@ -13,12 +13,14 @@ invent an event, because a fabricated event is worse than no answer.
 """
 
 import logging
+import time
+from typing import Awaitable, Callable, Optional
 
 from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message
 
-from .. import memory
+from .. import config, memory
 from ..ai.knowledge import KNOWLEDGE
 from ..ai.persona import PERSONA, PERSONA_REMINDER, apply_voice, sanitize_reply
 from ..ai.providers import AIRouter, AllProvidersFailedError, build_provider_chain
@@ -128,6 +130,70 @@ def _strip_mention(text: str, bot_username: str) -> str:
     return text.replace(f"@{bot_username}", "").strip() if text else text
 
 
+async def generate_reply(
+    question: str,
+    channel: str,
+    chat_id: int,
+    user_id: int,
+    on_partial: Optional[Callable[[str], Awaitable[None]]] = None,
+) -> Optional[str]:
+    """The one place a community-style answer gets produced: remember the
+    question, build the persona prompt with memory, call the model, clean the
+    reply, remember it. Shared by group/DM replies and guest-mode answers.
+    Returns None when no AI provider is configured; raises
+    AllProvidersFailedError when every provider is down. With on_partial, the
+    reply is streamed and on_partial receives the text accumulated so far."""
+    ai_router = _get_ai_router()
+    if not ai_router.configured:
+        return None
+
+    await memory.remember(channel, chat_id, user_id, "user", question)
+    history = await memory.build_prompt_messages(channel, chat_id, user_id, ai_router)
+    conversation = apply_voice([{"role": "system", "content": SYSTEM_PROMPT}] + history)
+
+    if on_partial is None:
+        result = await ai_router.complete(
+            conversation, max_tokens=MAX_REPLY_TOKENS, temperature=REPLY_TEMPERATURE
+        )
+        text = result.text
+    else:
+        text = ""
+        async for text in ai_router.stream(
+            conversation, max_tokens=MAX_REPLY_TOKENS, temperature=REPLY_TEMPERATURE
+        ):
+            await on_partial(text)
+
+    reply = sanitize_reply(text) or text
+    await memory.remember(channel, chat_id, user_id, "assistant", reply)
+    return reply
+
+
+class _DraftStreamer:
+    """Pushes accumulated text to Telegram as an ephemeral draft, at most
+    every ~0.8s. Any failure just disables drafts for this reply — the final
+    send_message is what the person actually gets."""
+
+    MIN_INTERVAL = 0.8
+
+    def __init__(self, bot: Bot, chat_id: int, draft_id: int, thread_id: Optional[int]):
+        self._bot, self._chat_id, self._draft_id, self._thread_id = bot, chat_id, draft_id, thread_id
+        self._last = 0.0
+        self._ok = True
+
+    async def push(self, text: str) -> None:
+        now = time.monotonic()
+        if not self._ok or now - self._last < self.MIN_INTERVAL or not text.strip():
+            return
+        self._last = now
+        try:
+            await self._bot.send_message_draft(
+                self._chat_id, self._draft_id, text=text, message_thread_id=self._thread_id
+            )
+        except Exception as exc:  # noqa: BLE001 - drafts are cosmetic
+            log.info("draft streaming disabled for this reply: %s", exc)
+            self._ok = False
+
+
 async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_group_activity: bool) -> None:
     if log_group_activity:
         await tracking.record_group_message(message)
@@ -135,8 +201,7 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
     if not question:
         return
 
-    ai_router = _get_ai_router()
-    if not ai_router.configured:
+    if not _get_ai_router().configured:
         # No keys configured yet — silently skip rather than tell every
         # member the bot is half-built. The founder already gets this
         # warning on his own channel.
@@ -144,23 +209,22 @@ async def _answer(bot: Bot, message: Message, question: str, key: tuple, log_gro
         return
 
     chat_id, user_id = key
-    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "user", question)
-    history = await memory.build_prompt_messages(MEMORY_CHANNEL, chat_id, user_id, ai_router)
-    conversation = apply_voice([{"role": "system", "content": SYSTEM_PROMPT}] + history)
+    streamer = None
+    if config.STREAM_DM_REPLIES and message.chat.type == "private":
+        streamer = _DraftStreamer(bot, message.chat.id, message.message_id, message.message_thread_id)
 
     async with show_typing(bot, message.chat.id, message.message_thread_id):
         try:
-            result = await ai_router.complete(
-                conversation, max_tokens=MAX_REPLY_TOKENS, temperature=REPLY_TEMPERATURE
+            reply = await generate_reply(
+                question, MEMORY_CHANNEL, chat_id, user_id,
+                on_partial=streamer.push if streamer else None,
             )
         except AllProvidersFailedError as exc:
             log.error("community Q&A failed, all providers down: %s", exc)
             await message.reply("Couldn't get an answer just now — try again shortly.")
             return
 
-    reply = sanitize_reply(result.text) or result.text
     await message.reply(reply)
-    await memory.remember(MEMORY_CHANNEL, chat_id, user_id, "assistant", reply)
 
 
 @router.message(F.chat.type.in_(GROUP_TYPES))

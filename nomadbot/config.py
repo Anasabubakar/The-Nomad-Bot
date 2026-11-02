@@ -18,6 +18,11 @@ LEADERBOARD_SIZE = 10
 # consulted again. Set without the leading "@".
 OWNER_BOOTSTRAP_USERNAME = os.environ.get("OWNER_USERNAME", "").strip().lstrip("@")
 
+# Live "draft" streaming of DM replies (Bot API sendMessageDraft). Off by
+# default: BotFather describes streamed threaded replies as possibly subject to
+# a Telegram Stars fee, so this is opt-in until that cost is confirmed.
+STREAM_DM_REPLIES = os.environ.get("STREAM_DM_REPLIES", "").strip().lower() in ("1", "true", "yes")
+
 
 def require_token() -> str:
     if not BOT_TOKEN:
