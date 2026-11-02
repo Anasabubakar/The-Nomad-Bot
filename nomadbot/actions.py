@@ -62,6 +62,50 @@ async def dm_member(bot: Bot, identifier: str, text: str) -> str:
     return f"Sent."
 
 
+SECRETARY_SETUP_HINT = (
+    "Secretary mode isn't connected. In Telegram: Settings > Business > Chatbots, "
+    "then add this bot and allow it to reply."
+)
+
+
+async def list_secretary_chats(owner_id: int) -> str:
+    conn = await db.get_active_business_connection(owner_id)
+    if conn is None:
+        return SECRETARY_SETUP_HINT
+    chats = await db.list_secretary_chats(conn["connection_id"])
+    if not chats:
+        return "Connected, but no chats seen yet. A chat shows up here once a message passes through it."
+    return "\n".join(f"{c['label']}" + (f" (@{c['username']})" if c["username"] else "") for c in chats)
+
+
+async def send_as_owner(bot: Bot, owner_id: int, chat: str, text: str) -> str:
+    """Sends `text` verbatim from the founder's own account (Telegram Business)
+    into a chat from the secretary directory. Refuses to guess between
+    several matching chats."""
+    conn = await db.get_active_business_connection(owner_id)
+    if conn is None:
+        return SECRETARY_SETUP_HINT
+    if not conn["can_reply"]:
+        return "Connected, but I'm not allowed to reply. Turn on 'reply to messages' for me in Settings > Business > Chatbots."
+
+    matches = await db.find_secretary_chats(conn["connection_id"], chat)
+    if not matches:
+        return f"No chat matching '{chat}' in the secretary directory. Use list_secretary_chats to see what I know."
+    if len(matches) > 1:
+        names = ", ".join(m["label"] for m in matches[:5])
+        return f"'{chat}' matches several chats ({names}). Be more specific."
+
+    target = matches[0]
+    try:
+        await bot.send_message(
+            target["chat_id"], text, business_connection_id=conn["connection_id"], parse_mode=None
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        log.warning("send_as_owner failed for %s: %s", target["chat_id"], exc)
+        return f"Couldn't send to {target['label']}: {exc}"
+    return f"Sent to {target['label']}."
+
+
 async def list_scheduled_tasks(created_by: int) -> str:
     jobs = await db.list_active_jobs(created_by=created_by)
     if not jobs:

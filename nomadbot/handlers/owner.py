@@ -93,6 +93,10 @@ async def dispatch_tool_call(bot: Bot, owner_id: int, call: ToolCall) -> str:
             return await actions.send_message_to_group(bot, args["destination"], args["text"])
         if call.name == "dm_member":
             return await actions.dm_member(bot, args["identifier"], args["text"])
+        if call.name == "send_as_owner":
+            return await actions.send_as_owner(bot, owner_id, args["chat"], args["text"])
+        if call.name == "list_secretary_chats":
+            return await actions.list_secretary_chats(owner_id)
         if call.name == "schedule_task":
             return await _schedule_task(owner_id, args)
         if call.name == "list_scheduled_tasks":

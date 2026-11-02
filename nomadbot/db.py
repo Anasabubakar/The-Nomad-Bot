@@ -106,6 +106,26 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
     updated_at        INTEGER NOT NULL,
     PRIMARY KEY (channel, chat_id, user_id)
 );
+
+-- Secretary mode (Telegram Business). Only the founder's own connection is ever
+-- stored here (handlers/business.py ignores everyone else's), and secretary_chats
+-- is a name directory only — who the founder's chats are with — never message text.
+CREATE TABLE IF NOT EXISTS business_connections (
+    connection_id TEXT PRIMARY KEY,
+    user_id       INTEGER NOT NULL,
+    can_reply     INTEGER NOT NULL,
+    is_enabled    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS secretary_chats (
+    connection_id TEXT NOT NULL,
+    chat_id       INTEGER NOT NULL,
+    label         TEXT NOT NULL,
+    username      TEXT,
+    last_seen     INTEGER NOT NULL,
+    PRIMARY KEY (connection_id, chat_id)
+);
 """
 
 
@@ -537,3 +557,80 @@ async def set_owner_id(user_id: int, username: Optional[str]) -> None:
         (user_id, username, now()),
     )
     await _conn().commit()
+
+
+async def save_business_connection(connection_id: str, user_id: int, can_reply: bool, is_enabled: bool) -> None:
+    await _conn().execute(
+        """
+        INSERT INTO business_connections (connection_id, user_id, can_reply, is_enabled, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(connection_id) DO UPDATE SET
+            user_id = excluded.user_id,
+            can_reply = excluded.can_reply,
+            is_enabled = excluded.is_enabled,
+            updated_at = excluded.updated_at
+        """,
+        (connection_id, user_id, int(can_reply), int(is_enabled), now()),
+    )
+    await _conn().commit()
+
+
+async def get_business_connection(connection_id: str) -> Optional[dict]:
+    async with _conn().execute(
+        "SELECT * FROM business_connections WHERE connection_id = ?", (connection_id,)
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def get_active_business_connection(user_id: int) -> Optional[dict]:
+    async with _conn().execute(
+        """
+        SELECT * FROM business_connections
+        WHERE user_id = ? AND is_enabled = 1
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (user_id,),
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def note_secretary_chat(connection_id: str, chat_id: int, label: str, username: Optional[str]) -> None:
+    await _conn().execute(
+        """
+        INSERT INTO secretary_chats (connection_id, chat_id, label, username, last_seen)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(connection_id, chat_id) DO UPDATE SET
+            label = excluded.label,
+            username = excluded.username,
+            last_seen = excluded.last_seen
+        """,
+        (connection_id, chat_id, label, username, now()),
+    )
+    await _conn().commit()
+
+
+async def find_secretary_chats(connection_id: str, identifier: str) -> list:
+    """Match by numeric chat id, @username, or a case-insensitive piece of the
+    display name. Returns every match so the caller can refuse to guess."""
+    ident = identifier.strip()
+    rows = []
+    async with _conn().execute(
+        "SELECT chat_id, label, username FROM secretary_chats WHERE connection_id = ? ORDER BY last_seen DESC",
+        (connection_id,),
+    ) as cur:
+        rows = [dict(r) for r in await cur.fetchall()]
+    if ident.lstrip("-").isdigit():
+        return [r for r in rows if r["chat_id"] == int(ident)]
+    low = ident.lstrip("@").lower()
+    exact = [r for r in rows if (r["username"] or "").lower() == low]
+    return exact or [r for r in rows if low and low in r["label"].lower()]
+
+
+async def list_secretary_chats(connection_id: str, limit: int = 30) -> list:
+    async with _conn().execute(
+        "SELECT chat_id, label, username FROM secretary_chats WHERE connection_id = ? ORDER BY last_seen DESC LIMIT ?",
+        (connection_id, limit),
+    ) as cur:
+        return [dict(r) for r in await cur.fetchall()]

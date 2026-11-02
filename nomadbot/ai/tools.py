@@ -90,6 +90,34 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "send_as_owner",
+            "description": (
+                "Secretary mode: send a message from the founder's OWN Telegram "
+                "account into one of his personal chats, exactly as it will "
+                "appear to the recipient. Only when he explicitly asks for it, "
+                "and send exactly the words he gave you, never your own rewrite."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chat": {"type": "string", "description": "Who the chat is with: a name, @username or numeric chat id."},
+                    "text": {"type": "string", "description": "The exact message to send."},
+                },
+                "required": ["chat", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_secretary_chats",
+            "description": "List the founder's personal chats that secretary mode knows about.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_scheduled_tasks",
             "description": "List your currently active scheduled tasks.",
             "parameters": {"type": "object", "properties": {}},
